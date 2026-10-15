@@ -14,6 +14,7 @@ const KIND_LABEL: Record<TodaysMove["kind"], string> = {
   "stale-pending": "Confirm",
   "old-iou": "IOU",
   "unused-subscription": "Subscription",
+  "goal-past-due": "Goal",
 };
 
 const markPaidPill =

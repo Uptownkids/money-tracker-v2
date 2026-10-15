@@ -167,10 +167,41 @@ export interface PinnedContributionResolution {
 }
 
 /**
+ * Funding a goal has received, ignoring spending. Transfer/Income/Refund
+ * with goalId: +amount. Expenses with goalId are "used", not "unsaved":
+ * spending the money never increases a future contribution. Used for
+ * contribution math; progress bars still use deriveGoalSaved.
+ */
+export function deriveGoalFunded(
+  goalId: string,
+  transactions: readonly Transaction[],
+  asOfDateExclusive?: DateOnly,
+  toBase: GoalTxToBase = rawTxAmount,
+): MinorUnits {
+  let total = 0;
+  for (const t of transactions) {
+    if (t.goalId !== goalId || !affectsBalance(t)) continue;
+    if (t.type === "Expense") continue;
+    if (asOfDateExclusive && compareDateOnly(t.date, asOfDateExclusive) >= 0) continue;
+    total += toBase(t);
+  }
+  return total;
+}
+
+/**
+ * Whether a goal takes part in contribution math and commitments.
+ * Completed goals are done: no contributions, no committed amounts,
+ * no Today's Moves. Paused goals are skipped the same way.
+ */
+export function countsTowardCommitment(goal: Goal): boolean {
+  return !goal.paused && !goal.completed;
+}
+
+/**
  * Resolve this cycle's contribution. Uses the pinned amount when the
  * goal's pin matches this cycle's start date; otherwise computes from
- * the saved amount as of the cycle start. Mid-cycle funding never
- * changes the pinned target.
+ * the funded amount as of the cycle start (spending counts as used,
+ * never as unsaved). Mid-cycle funding never changes the pinned target.
  */
 export function resolvePinnedContribution(
   goal: Goal,
@@ -181,9 +212,9 @@ export function resolvePinnedContribution(
   if (goal.pinnedContribution && goal.pinnedContribution.cycleStart === cycleStart) {
     return { amount: goal.pinnedContribution.amount, shouldPin: false };
   }
-  const savedAsOfStart = deriveGoalSaved(goal.id, transactions, cycleStart);
+  const fundedAsOfStart = deriveGoalFunded(goal.id, transactions, cycleStart);
   return {
-    amount: computeCycleContribution(goal, savedAsOfStart, cyclesRemaining),
+    amount: computeCycleContribution(goal, fundedAsOfStart, cyclesRemaining),
     shouldPin: true,
   };
 }

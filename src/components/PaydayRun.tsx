@@ -34,6 +34,7 @@ import {
   fundedThisCycle,
   goalTargetDateOrDefault,
   resolvePinnedContribution,
+  countsTowardCommitment,
 } from "../domain/engine/goals.js";
 import { deriveBalances } from "../domain/engine/balances.js";
 import { maxZero, subMinor, sumMinor, type MinorUnits } from "../domain/money/money.js";
@@ -185,7 +186,7 @@ export function PaydayRun({ payDate, paydayRuleId, occurrenceDate, onClose, onCh
       }
 
       // Pin this cycle's goal contributions (same as the dashboard).
-      const activeGoals = goals.filter((g) => !g.paused);
+      const activeGoals = goals.filter((g) => countsTowardCommitment(g));
       const pinnedGoals: Goal[] = [];
       const nowIso = new Date().toISOString();
       for (const goal of activeGoals) {

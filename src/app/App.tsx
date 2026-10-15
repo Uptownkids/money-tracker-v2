@@ -27,7 +27,7 @@ import type { Transaction } from "../domain/entities/transaction.js";
 import { applyTheme, watchSystemTheme } from "./theme.js";
 import { maybeNotifyUpcomingBills } from "./notifications.js";
 import { markOnboardingComplete, shouldShowOnboarding } from "./onboarding.js";
-import { SafeToSpendHero } from "../components/SafeToSpendHero.js";
+import { TodayCards } from "../components/TodayCards.js";
 import { BalancesList } from "../components/BalancesList.js";
 import { TodaysMoves } from "../components/TodaysMoves.js";
 import { BillMoveSheet, IouMoveSheet } from "../components/MoveSheets.js";
@@ -411,6 +411,9 @@ export function App() {
         case "old-iou":
           setIouSplitId(move.relatedId);
           return;
+        case "goal-past-due":
+          setTab("goals");
+          return;
         case "unused-subscription":
           setBillsEditRuleId(move.relatedId);
           setTab("bills");
@@ -694,7 +697,7 @@ export function App() {
             ) : (
               <>
                 <FxWarningBanner currencies={state.fxWarnings} />
-                <SafeToSpendHero state={state} onPauseGoal={(goalId) => void pauseGoal(goalId)} />
+                <TodayCards state={state} onPauseGoal={(goalId) => void pauseGoal(goalId)} />
                 <PaydayBanner
                   state={state}
                   onStart={openPaydayRun}

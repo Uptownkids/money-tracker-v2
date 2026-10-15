@@ -10,6 +10,7 @@ import type { Split } from "../../domain/entities/split.js";
 import type { DailySnapshot, PaydayRunState, Settings } from "../../domain/entities/settings.js";
 import type { SnoozedMove } from "../../domain/entities/snoozedMove.js";
 import type { DateOnly } from "../../domain/dates/dateOnly.js";
+import { countsTowardCommitment } from "../../domain/engine/goals.js";
 
 export class AccountRepository extends Repository<Account> {
   active(): Promise<Account[]> {
@@ -64,7 +65,7 @@ export class RecurringOverrideRepository extends Repository<RecurringOverride> {
 
 export class GoalRepository extends Repository<Goal> {
   active(): Promise<Goal[]> {
-    return this.table.filter((g) => !g.paused).toArray();
+    return this.table.filter((g) => countsTowardCommitment(g)).toArray();
   }
 }
 

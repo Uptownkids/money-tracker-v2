@@ -415,6 +415,11 @@ export function Insights() {
                     <div className="mb-1 flex items-baseline justify-between">
                       <span className="text-sm font-medium text-stone-900 dark:text-stone-100">
                         {goal.name}
+                        {goal.completed && (
+                          <span className="ml-2 rounded-full bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 align-middle text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                            Completed
+                          </span>
+                        )}
                       </span>
                       <span className="text-xs text-stone-500 dark:text-stone-400">
                         {formatMoney(saved, baseCurrency)} of {formatMoney(goal.targetAmount, baseCurrency)}

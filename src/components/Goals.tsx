@@ -188,6 +188,7 @@ function GoalFormSheet({
             pinnedContribution: null,
             priority: prio,
             paused: false,
+            completed: false,
             createdAt: now,
             updatedAt: now,
           };
@@ -341,11 +342,13 @@ function GoalCard({
   saved,
   onEdit,
   onTogglePaused,
+  onToggleCompleted,
 }: {
   goal: Goal;
   saved: MinorUnits;
   onEdit: () => void;
   onTogglePaused: () => void;
+  onToggleCompleted: () => void;
 }) {
   const pct =
     goal.targetAmount > 0
@@ -354,7 +357,7 @@ function GoalCard({
   return (
     <div
       className={`rounded-2xl border border-stone-100 dark:border-stone-800 px-4 py-3.5 ${
-        goal.paused ? "opacity-60" : ""
+        goal.paused || goal.completed ? "opacity-60" : ""
       }`}
     >
       <div className="flex items-start justify-between gap-3">
@@ -364,10 +367,16 @@ function GoalCard({
             <span className="rounded-full bg-stone-100 dark:bg-stone-800 px-2 py-0.5 text-[11px] font-medium text-stone-600 dark:text-stone-400">
               Pause #{goal.priority}
             </span>
-            {goal.paused && (
-              <span className="rounded-full bg-stone-900 dark:bg-stone-100 px-2 py-0.5 text-[11px] font-medium text-white dark:text-stone-900">
-                Paused
+            {goal.completed ? (
+              <span className="rounded-full bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                Completed
               </span>
+            ) : (
+              goal.paused && (
+                <span className="rounded-full bg-stone-900 dark:bg-stone-100 px-2 py-0.5 text-[11px] font-medium text-white dark:text-stone-900">
+                  Paused
+                </span>
+              )
             )}
             {goal.contributionPerCycleOverride !== undefined && (
               <span className="rounded-full bg-stone-100 dark:bg-stone-800 px-2 py-0.5 text-[11px] font-medium text-stone-600 dark:text-stone-400">
@@ -377,13 +386,32 @@ function GoalCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          <button
-            type="button"
-            onClick={onTogglePaused}
-            className="text-xs font-medium text-stone-500 dark:text-stone-400 transition-colors hover:text-stone-900 dark:hover:text-stone-100"
-          >
-            {goal.paused ? "Resume" : "Pause"}
-          </button>
+          {goal.completed ? (
+            <button
+              type="button"
+              onClick={onToggleCompleted}
+              className="text-xs font-medium text-stone-500 dark:text-stone-400 transition-colors hover:text-stone-900 dark:hover:text-stone-100"
+            >
+              Reopen
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onToggleCompleted}
+                className="text-xs font-medium text-stone-500 dark:text-stone-400 transition-colors hover:text-stone-900 dark:hover:text-stone-100"
+              >
+                Complete
+              </button>
+              <button
+                type="button"
+                onClick={onTogglePaused}
+                className="text-xs font-medium text-stone-500 dark:text-stone-400 transition-colors hover:text-stone-900 dark:hover:text-stone-100"
+              >
+                {goal.paused ? "Resume" : "Pause"}
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={onEdit}
@@ -469,8 +497,25 @@ export function Goals({ onChanged }: { onChanged: () => void }) {
     [afterWrite],
   );
 
+  const toggleCompleted = useCallback(
+    async (goal: Goal) => {
+      const repos = createRepositories(getActiveDb());
+      await repos.goals.put({
+        ...goal,
+        completed: !goal.completed,
+        updatedAt: new Date().toISOString(),
+      });
+      await afterWrite();
+    },
+    [afterWrite],
+  );
+
+  // Active goals first (by pause priority), completed ones at the bottom.
   const sorted = [...goals].sort(
-    (a, b) => a.priority - b.priority || a.name.localeCompare(b.name),
+    (a, b) =>
+      Number(!!a.completed) - Number(!!b.completed) ||
+      a.priority - b.priority ||
+      a.name.localeCompare(b.name),
   );
   const defaultPriority =
     goals.length === 0 ? 1 : Math.max(...goals.map((g) => g.priority)) + 1;
@@ -512,6 +557,7 @@ export function Goals({ onChanged }: { onChanged: () => void }) {
                 saved={deriveGoalSaved(g.id, transactions)}
                 onEdit={() => setEditing(g)}
                 onTogglePaused={() => void togglePaused(g)}
+                onToggleCompleted={() => void toggleCompleted(g)}
               />
             ))}
           </div>

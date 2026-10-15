@@ -8,6 +8,7 @@
  *   4. pending transactions older than 5 days
  *   5. IOUs older than 14 days
  *   6. unused subscriptions renewing within 7 days
+ *   7. goals whose target date has passed ("mark complete?")
  */
 import type { DateOnly } from "../dates/dateOnly.js";
 import { addDays, compareDateOnly, diffDays } from "../dates/dateOnly.js";
@@ -16,6 +17,7 @@ import { decimalsOf } from "../money/currency.js";
 import type { RecurringRule } from "../entities/recurringRule.js";
 import type { Split } from "../entities/split.js";
 import type { Transaction } from "../entities/transaction.js";
+import type { Goal } from "../entities/goal.js";
 import type { ProjectedOccurrence } from "./projection.js";
 
 export type MoveKind =
@@ -24,7 +26,8 @@ export type MoveKind =
   | "bill-due-soon"
   | "stale-pending"
   | "old-iou"
-  | "unused-subscription";
+  | "unused-subscription"
+  | "goal-past-due";
 
 export interface TodaysMove {
   id: string;
@@ -47,6 +50,8 @@ export interface MovesContext {
   rules: RecurringRule[];
   pendingTransactions: Transaction[];
   splits: Split[];
+  /** All goals (the ranker filters for past-due, uncompleted ones). */
+  goals: Goal[];
   /**
    * Snoozed moves, loaded by the caller (e.g. dashboard) from the
    * snoozedMoves table. A move is hidden while
@@ -203,6 +208,22 @@ export function rankTodaysMoves(ctx: MovesContext): TodaysMove[] {
       title: `Cancel ${rule.name}? It renews ${p.date}`,
       amount: p.amount,
       relatedId: p.ruleId,
+      actions: ["snooze", "open"],
+    });
+  }
+
+  // 7. goals whose target date has passed — nudge to mark complete.
+  // Completed goals never appear; snoozing hides one until tomorrow.
+  for (const g of ctx.goals) {
+    if (g.completed) continue;
+    if (!g.targetDate) continue;
+    if (compareDateOnly(g.targetDate, today) >= 0) continue;
+    moves.push({
+      id: `move:goal-due:${g.id}`,
+      kind: "goal-past-due",
+      priority: 7,
+      title: `${g.name}: mark complete?`,
+      relatedId: g.id,
       actions: ["snooze", "open"],
     });
   }

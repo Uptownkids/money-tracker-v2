@@ -348,6 +348,7 @@ export async function writeFreshOnboarding(
       pinnedContribution: null,
       priority: 1,
       paused: false,
+      completed: false,
       createdAt: nowIso,
       updatedAt: nowIso,
     };

@@ -260,6 +260,7 @@ export function migrateFromV1(v1: V1Dashboard, opts: MigrationOptions): Migratio
       pinnedContribution: null,
       priority: 1,
       paused: false,
+      completed: false,
       createdAt: nowIso,
       updatedAt: nowIso,
     });
@@ -343,6 +344,7 @@ export function migrateFromV1(v1: V1Dashboard, opts: MigrationOptions): Migratio
       pinnedContribution: null,
       priority: 2,
       paused: false,
+      completed: false,
       createdAt: nowIso,
       updatedAt: nowIso,
     });
@@ -363,6 +365,7 @@ export function migrateFromV1(v1: V1Dashboard, opts: MigrationOptions): Migratio
       pinnedContribution: null,
       priority: 3,
       paused: false,
+      completed: false,
       createdAt: nowIso,
       updatedAt: nowIso,
     };

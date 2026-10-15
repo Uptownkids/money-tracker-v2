@@ -15,6 +15,7 @@ import {
   goalTargetDateOrDefault,
   resolvePinnedContribution,
   committedPerGoal,
+  countsTowardCommitment,
 } from "../domain/engine/goals.js";
 import {
   calculateSafeToSpend,
@@ -48,8 +49,12 @@ export interface DashboardState {
   heroState: "normal" | "amber" | "red" | "deficit";
   accounts: Account[];
   balances: Record<string, MinorUnits>;
+  /** Base-currency total across spendable accounts (cash on hand). */
+  cashOnHand: MinorUnits;
   moves: TodaysMove[];
   nextPayday: DateOnly | null;
+  /** True when today is a payday (for the cash card's "Payday today"). */
+  isPaydayToday: boolean;
   cycleDaysLeft: number;
   deficitPauseSuggestion: { goalId: string; goalName: string; amount: MinorUnits } | null;
   /** Currencies with no usable FX rate this load (amounts passed through unconverted). */
@@ -199,7 +204,8 @@ export async function loadDashboardState(): Promise<DashboardState> {
   );
 
   // Goal commitments, pinning each cycle's contribution on first use.
-  const activeGoals = goals.filter((g) => !g.paused);
+  // Completed goals are done: no contributions, no commitments.
+  const activeGoals = goals.filter((g) => countsTowardCommitment(g));
   const goalValues: MinorUnits[] = [];
   const goalContributions = new Map<string, MinorUnits>();
   for (const goal of activeGoals) {
@@ -287,6 +293,7 @@ export async function loadDashboardState(): Promise<DashboardState> {
     rules: activeRules,
     pendingTransactions: transactions.filter((t) => t.status === "Pending"),
     splits,
+    goals,
     snoozed,
   });
 
@@ -314,8 +321,15 @@ export async function loadDashboardState(): Promise<DashboardState> {
     heroState,
     accounts: accounts.filter((a) => !a.archived),
     balances,
+    cashOnHand: accounts
+      .filter((a) => !a.archived && a.countsAsSpendable)
+      .reduce(
+        (sum, a) => sum + convertToBase(balances[a.id] ?? 0, a.currency, a),
+        0,
+      ),
     moves,
     nextPayday,
+    isPaydayToday,
     cycleDaysLeft: cycle ? cycle.daysLeft : 30,
     deficitPauseSuggestion,
     fxWarnings,

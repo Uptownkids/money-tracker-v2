@@ -15,6 +15,7 @@ function ctx(o: Partial<MovesContext> = {}): MovesContext {
     rules: [],
     pendingTransactions: [],
     splits: [],
+    goals: [],
     ...o,
   };
 }

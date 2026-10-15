@@ -101,6 +101,7 @@ export function mkGoal(o: Partial<Goal> = {}): Goal {
     pinnedContribution: null,
     priority: 2,
     paused: false,
+    completed: false,
     createdAt: NOW,
     updatedAt: NOW,
     ...o,
