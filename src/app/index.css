@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/* Class-based dark mode: applyTheme() toggles .dark on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-display: Georgia, "Times New Roman", ui-serif, serif;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--color-stone-100);
+  color: var(--color-stone-900);
+}
+
+.dark body {
+  background-color: var(--color-stone-950);
+  color: var(--color-stone-100);
+}
