@@ -281,6 +281,41 @@ describe("LA trip float migration", () => {
     }
   });
 
+  it("migration-day expenses don't double-count: tracking starts the day after migration", () => {
+    // v1's current_cash is a live snapshot: it already reflects expenses
+    // dated on migration day itself (the $9.64 Cash diff in the Oct 15
+    // reconciliation screenshot).
+    const v1: V1Dashboard = {
+      bills: [],
+      debts: [],
+      expenses: [
+        { id: 1, amount: 0.88, category: "Other", expense_date: "2026-10-15", note: "Citi bike" },
+        { id: 2, amount: 8.76, category: "Coffee", expense_date: "2026-10-15", note: "Coffee" },
+      ],
+      settings: {
+        current_cash: 3.36,
+        savings_per_paycheck: 0,
+        savings_goal: 0,
+        paycheck_amount: 0,
+        payday_one: 15,
+        payday_two: 30,
+      },
+      savings_total: 0,
+      trip_expenses: [],
+      bill_payments: [],
+    };
+    const res = migrateFromV1(v1, { migrationDate: "2026-10-15", nowIso: NOW });
+    const cash = res.accounts.find((a) => a.name === "Cash")!;
+    // Tracking starts Oct 16, so every migrated row is strictly before
+    // tracking started.
+    expect(cash.startingDate).toBe("2026-10-16");
+    const balances = deriveBalances(res.accounts, res.transactions);
+    expect(balances[cash.id]).toBe(336);
+    for (const r of reconciliationDiffs(v1, res)) {
+      expect(r.diffMinor).toBe(0);
+    }
+  });
+
   it("migrates bill_payments against card/loan bills as Transfers to the liability", () => {
     const v1 = v1Dashboard();
     v1.bills = [

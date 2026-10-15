@@ -78,7 +78,11 @@ export interface V1Dashboard {
 }
 
 export interface MigrationOptions {
-  /** Calendar date the migration runs (entity timestamps + startingDate). */
+  /**
+   * Calendar date the migration runs (entity timestamps). Account
+   * startingDates are set to the day after: v1's snapshots already
+   * reflect every transaction in the file, including migration-day ones.
+   */
   migrationDate: DateOnly;
   /** ISO timestamp for createdAt/updatedAt. */
   nowIso: string;
@@ -176,13 +180,18 @@ export function migrateFromV1(v1: V1Dashboard, opts: MigrationOptions): Migratio
     startingBalance: number,
     countsAsSpendable: boolean,
   ): Account => {
+    // Tracking starts the day AFTER migration: v1's current_cash /
+    // current_balance snapshots already reflect every transaction in the
+    // file, including ones dated on migration day itself, so all migrated
+    // rows are strictly "before tracking started" and never move a
+    // balance. Anything logged after migrating counts normally.
     const a: Account = {
       id: crypto.randomUUID(),
       name,
       type,
       currency: "USD",
       startingBalance,
-      startingDate: migrationDate,
+      startingDate: addDays(migrationDate, 1),
       countsAsSpendable,
       archived: false,
       createdAt: nowIso,
