@@ -15,7 +15,8 @@ import { resolvePaydayRunTarget, type PaydayRunTarget } from "./paydayRunEntry.j
 import type { DateOnly } from "../domain/dates/dateOnly.js";
 import { compareDateOnly, todayLocal } from "../domain/dates/dateOnly.js";
 import { createRepositories } from "../data/repositories/index.js";
-import { getActiveDb } from "../data/db.js";
+import { getActiveDb, getDb, isDemoMode, setDemoMode } from "../data/db.js";
+import { parseDeepLink, type AdjustIntent } from "../utils/deepLink.js";
 import {
   billMoveRef,
   markStaleCleared,
@@ -31,7 +32,8 @@ import { BalancesList } from "../components/BalancesList.js";
 import { TodaysMoves } from "../components/TodaysMoves.js";
 import { BillMoveSheet, IouMoveSheet } from "../components/MoveSheets.js";
 import { DemoBanner } from "../components/DemoBanner.js";
-import { QuickLog } from "../components/QuickLog.js";
+import { QuickLog, type QuickLogPrefill } from "../components/QuickLog.js";
+import { DeepLinkAdjust } from "../components/DeepLinkAdjust.js";
 import { EverythingLog } from "../components/EverythingLog.js";
 import { Accounts } from "../components/Accounts.js";
 import { RecurringRules } from "../components/RecurringRules.js";
@@ -157,6 +159,86 @@ function GearIcon() {
   );
 }
 
+/**
+ * Persistent deep-link notices. The parse-error panel states exactly what
+ * was wrong with the link; the not-ready panel explains the iOS storage
+ * split (installed app vs Safari keep separate data). Both are
+ * dismissible and never auto-hide.
+ */
+function DeepLinkErrorPanel({ message, onClose }: { message: string; onClose: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="rounded-2xl bg-red-50 px-4 py-3.5 ring-1 ring-inset ring-red-200 dark:bg-red-950 dark:ring-red-800"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-red-900 dark:text-red-100">
+            Couldn&rsquo;t open this link
+          </p>
+          <p className="mt-0.5 text-sm text-red-700 dark:text-red-300">{message}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 rounded-full border border-red-300 px-3.5 py-1.5 text-xs font-medium text-red-800 transition-colors hover:bg-red-100 dark:border-red-700 dark:text-red-200 dark:hover:bg-red-900"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DeepLinkNotReadyPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="rounded-2xl bg-stone-200/70 px-4 py-3.5 ring-1 ring-inset ring-stone-300 dark:bg-stone-800 dark:ring-stone-700"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-stone-900 dark:text-stone-100">
+            No tracker data in this browser
+          </p>
+          <p className="mt-0.5 text-sm text-stone-600 dark:text-stone-400">
+            Your iPhone keeps the installed app&rsquo;s data separate from Safari, so this
+            browser doesn&rsquo;t see your tracker yet. Links work when opened in the same
+            browser where your data lives.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 rounded-full border border-stone-300 px-3.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:bg-stone-300/50 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-700"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DeepLinkNotices({
+  error,
+  notReady,
+  onCloseError,
+  onCloseNotReady,
+}: {
+  error: string | null;
+  notReady: boolean;
+  onCloseError: () => void;
+  onCloseNotReady: () => void;
+}) {
+  if (!error && !notReady) return null;
+  return (
+    <div className="flex flex-col gap-3">
+      {notReady && <DeepLinkNotReadyPanel onClose={onCloseNotReady} />}
+      {error && <DeepLinkErrorPanel message={error} onClose={onCloseError} />}
+    </div>
+  );
+}
+
 /** Fixed top banner shown when a new service worker version is waiting. */
 function SwUpdateBanner() {
   return (
@@ -195,6 +277,14 @@ export function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   // Service worker update banner.
   const [swUpdateAvailable, setSwUpdateAvailable] = useState(false);
+  // One-tap deep links (?add= / ?adjust=).
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
+  const [deepLinkNotReady, setDeepLinkNotReady] = useState(false);
+  const [quickLogPrefill, setQuickLogPrefill] = useState<QuickLogPrefill | null>(null);
+  const [adjustDialog, setAdjustDialog] = useState<{
+    intent: AdjustIntent;
+    accountId: string;
+  } | null>(null);
 
   // Service worker updates: show the banner when a new version is waiting.
   // onSwUpdate fires immediately if an update is already waiting, so late
@@ -392,6 +482,98 @@ export function App() {
     void checkOnboarding();
   }, [checkOnboarding, reloadKey]);
 
+  // One-tap deep links (?add= / ?adjust=). Reads the query string once on
+  // launch, resolves it against the REAL database (never demo), then
+  // strips it from the URL so a reload can't re-trigger the intent.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let search = "";
+      try {
+        search = window.location.search;
+      } catch {
+        return;
+      }
+      if (!search || search === "?") return;
+      try {
+        window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+      } catch {
+        // Non-fatal: the intent string is already captured above.
+      }
+      let settings;
+      let accounts;
+      try {
+        const repos = createRepositories(getDb());
+        [settings, accounts] = await Promise.all([
+          repos.settings.get(),
+          repos.accounts.getAll(),
+        ]);
+      } catch {
+        if (!cancelled) setDeepLinkError("couldn't read your tracker data — try again");
+        return;
+      }
+      if (cancelled) return;
+      if (shouldShowOnboarding(settings, accounts.length)) {
+        // No real accounts in THIS browser. On iOS the installed app and
+        // Safari keep separate storage, so the data usually lives in the
+        // other container — never prefill into demo mode.
+        setDeepLinkNotReady(true);
+        return;
+      }
+      const live = accounts.filter((a) => !a.archived);
+      const parsed = parseDeepLink(
+        search,
+        live.map((a) => a.name),
+        todayLocal(),
+      );
+      if (cancelled) return;
+      if (!parsed.ok) {
+        setDeepLinkError(parsed.error);
+        return;
+      }
+      if (!parsed.intent) return;
+      const needle = parsed.intent.accountName.trim().toLowerCase();
+      const account = live.find((a) => a.name.trim().toLowerCase() === needle);
+      if (!account) {
+        // The parser already guaranteed exactly one match; this guards a
+        // rename racing the link.
+        setDeepLinkError(`account "${parsed.intent.accountName}" not found`);
+        return;
+      }
+      if (isDemoMode()) {
+        // Links always target real data — drop out of demo mode first so
+        // the sheet can't save into the demo database.
+        setDemoMode(false);
+        reload();
+      }
+      if (parsed.intent.kind === "add") {
+        setQuickLogPrefill({
+          type: parsed.intent.entryType,
+          amount: parsed.intent.amountText,
+          payee: parsed.intent.payee,
+          accountId: account.id,
+          date: parsed.intent.date,
+        });
+      } else {
+        setAdjustDialog({ intent: parsed.intent, accountId: account.id });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [reload]);
+
+  const consumePrefill = useCallback(() => setQuickLogPrefill(null), []);
+
+  const onAdjustApplied = useCallback(
+    (message: string) => {
+      setAdjustDialog(null);
+      showToast(message);
+      reload();
+    },
+    [reload, showToast],
+  );
+
   // Theme + bill notifications, once on mount.
   useEffect(() => {
     const repos = createRepositories(getActiveDb());
@@ -425,6 +607,14 @@ export function App() {
     return (
       <div className="min-h-dvh bg-stone-100 dark:bg-stone-950">
         {swUpdateAvailable && <SwUpdateBanner />}
+        <div className="mx-auto w-full max-w-md px-4 pt-4">
+          <DeepLinkNotices
+            error={deepLinkError}
+            notReady={deepLinkNotReady}
+            onCloseError={() => setDeepLinkError(null)}
+            onCloseNotReady={() => setDeepLinkNotReady(false)}
+          />
+        </div>
         <Onboarding onDone={finishOnboarding} />
       </div>
     );
@@ -448,6 +638,12 @@ export function App() {
             <GearIcon />
           </button>
         </div>
+        <DeepLinkNotices
+          error={deepLinkError}
+          notReady={deepLinkNotReady}
+          onCloseError={() => setDeepLinkError(null)}
+          onCloseNotReady={() => setDeepLinkNotReady(false)}
+        />
         {tab === "dashboard" && (
           <>
             <DemoBanner onChanged={reload} />
@@ -508,7 +704,20 @@ export function App() {
         {tab === "insights" && <Insights />}
       </div>
 
-      <QuickLog onSaved={reload} />
+      <QuickLog
+        onSaved={reload}
+        prefill={quickLogPrefill}
+        onPrefillConsumed={consumePrefill}
+      />
+
+      {adjustDialog && (
+        <DeepLinkAdjust
+          intent={adjustDialog.intent}
+          accountId={adjustDialog.accountId}
+          onClose={() => setAdjustDialog(null)}
+          onApplied={onAdjustApplied}
+        />
+      )}
 
       {paydayRun && (
         <PaydayRun

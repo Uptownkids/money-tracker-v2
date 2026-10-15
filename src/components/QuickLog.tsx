@@ -87,7 +87,31 @@ function earmarkedByGoal(
   return out;
 }
 
-export function QuickLog({ onSaved }: { onSaved: () => void }) {
+/**
+ * Deep-link prefill: when the App hands Quick-Log a prefill (from a
+ * ?add= link), the sheet opens once with those values. The normal Save
+ * path runs unchanged — bill matching, duplicate checks, and per-currency
+ * amount validation all still apply. Nothing saves until the user taps
+ * Save. onPrefillConsumed fires right after the sheet opens so the App
+ * can clear the prefill and re-renders never reopen it.
+ */
+export interface QuickLogPrefill {
+  type: "Expense" | "Income";
+  amount: string;
+  payee: string;
+  accountId: string;
+  date: DateOnly;
+}
+
+export function QuickLog({
+  onSaved,
+  prefill,
+  onPrefillConsumed,
+}: {
+  onSaved: () => void;
+  prefill?: QuickLogPrefill | null;
+  onPrefillConsumed?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -116,7 +140,7 @@ export function QuickLog({ onSaved }: { onSaved: () => void }) {
 
   const demo = isDemoMode();
 
-  const openSheet = async () => {
+  const openSheet = async (pf?: QuickLogPrefill | null) => {
     const repos = createRepositories(getActiveDb());
     const [accts, cats, txs, goalRows, settings] = await Promise.all([
       repos.accounts.active(),
@@ -133,20 +157,27 @@ export function QuickLog({ onSaved }: { onSaved: () => void }) {
     setBaseCurrency(settings?.baseCurrency ?? "USD");
     setLastUsedFxRates(settings?.lastUsedFxRates ?? {});
     setPaidFromGoalId("");
-    setType("Expense");
-    setAmount("");
+    const entryType = pf?.type ?? "Expense";
+    setType(entryType);
+    setAmount(pf?.amount ?? "");
     let initialAccount = accts[0]?.id ?? "";
-    try {
-      const last = window.localStorage.getItem(LAST_ACCOUNT_KEY);
-      if (last && accts.some((a) => a.id === last)) initialAccount = last;
-    } catch {
-      // storage unavailable; fall back to the first account
+    if (pf?.accountId && accts.some((a) => a.id === pf.accountId)) {
+      // Deep-link prefill wins over the last-used account.
+      initialAccount = pf.accountId;
+    } else {
+      try {
+        const last = window.localStorage.getItem(LAST_ACCOUNT_KEY);
+        if (last && accts.some((a) => a.id === last)) initialAccount = last;
+      } catch {
+        // storage unavailable; fall back to the first account
+      }
     }
     setAccountId(initialAccount);
     setToAccountId("");
-    setPayee("");
-    setDate(todayLocal());
-    setCategoryId(live.find((c) => c.kind === "expense")?.id ?? "");
+    setPayee(pf?.payee ?? "");
+    setDate(pf?.date ?? todayLocal());
+    const defaultKind = entryType === "Income" ? "income" : "expense";
+    setCategoryId(live.find((c) => c.kind === defaultKind)?.id ?? "");
     setError(null);
     setSaved(false);
     setSaving(false);
@@ -163,6 +194,18 @@ export function QuickLog({ onSaved }: { onSaved: () => void }) {
     setSaved(false);
     setPendingBill(null);
   };
+
+  // Deep-link prefill: when the App hands us a prefill, open the sheet
+  // once with those values, then tell the App it was consumed so later
+  // re-renders never reopen it. openSheet only touches state setters
+  // (stable), so omitting it from deps is safe.
+  useEffect(() => {
+    if (prefill) {
+      void openSheet(prefill);
+      onPrefillConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
 
   // "n" opens the sheet. Ignored inside editable fields, with any modifier
   // key held, or when the sheet is already open.
