@@ -16,7 +16,9 @@ for attempt in $(seq 1 "$MAX_RETRIES"); do
   META=$(gh api "repos/$REPO/contents/$PATH_FILE" --jq '{sha: .sha, content: .content}')
   SHA=$(printf '%s' "$META" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')
 
-  # Merge: decode, prune entries older than 90 days, append, re-encode
+  # Merge: decode, prune entries older than 90 days (by inbox age:
+  # createdAt first, falling back to the transaction date), reject
+  # duplicate ids, append, re-encode
   RESULT=$(printf '%s' "$META" | ENTRY_JSON="$ENTRY_JSON" python3 -c '
 import json, os, base64, datetime, sys
 meta = json.load(sys.stdin)
@@ -24,17 +26,30 @@ raw = base64.b64decode(meta["content"]).decode("utf-8")
 doc = json.loads(raw)
 entries = doc.get("entries", [])
 today = datetime.date.today()
+
+def inbox_age_date(e):
+    ca = e.get("createdAt")
+    if isinstance(ca, str) and len(ca) >= 10:
+        try:
+            return datetime.date.fromisoformat(ca[:10])
+        except ValueError:
+            pass
+    try:
+        return datetime.date.fromisoformat(e.get("date", ""))
+    except ValueError:
+        return None
+
 kept = []
 for e in entries:
-    try:
-        d = datetime.date.fromisoformat(e.get("date", ""))
-        if (today - d).days <= 90:
-            kept.append(e)
-    except ValueError:
+    d = inbox_age_date(e)
+    if d is None or (today - d).days <= 90:
         kept.append(e)  # keep unparseable rather than silently drop
 new_entry = json.loads(os.environ["ENTRY_JSON"])
 if not new_entry.get("id"):
     raise SystemExit("entry is missing id")
+existing_ids = {e.get("id") for e in kept}
+if new_entry.get("id") in existing_ids:
+    raise SystemExit(f"duplicate entry id {new_entry.get(\"id\")!r}: not appended")
 kept.append(new_entry)
 out = json.dumps({"entries": kept}, indent=2) + "\n"
 print(base64.b64encode(out.encode("utf-8")).decode("ascii"))

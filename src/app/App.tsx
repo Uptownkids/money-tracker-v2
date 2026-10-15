@@ -47,6 +47,7 @@ import { Onboarding } from "../components/Onboarding.js";
 import { SettingsSheet, BackupBanner } from "../components/Settings.js";
 import { PaydayRun } from "../components/PaydayRun.js";
 import { applySwUpdate, onSwUpdate } from "./swUpdates.js";
+import { loadDemoData } from "./seed.js";
 
 type Tab = "dashboard" | "log" | "bills" | "goals" | "accounts" | "insights";
 
@@ -83,15 +84,20 @@ function LoadError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ onLoadDemo }: { onLoadDemo: () => void }) {
   return (
     <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 px-8 text-center">
       <p className="font-display text-2xl text-stone-900 dark:text-stone-100">No accounts yet.</p>
       <p className="text-sm text-stone-600 dark:text-stone-400">
-        Add your first account to start tracking, or tap{" "}
-        <span className="font-medium text-stone-900 dark:text-stone-100">Load demo</span> above to
-        explore with sample data.
+        Add your first account to start tracking, or explore with sample data.
       </p>
+      <button
+        type="button"
+        onClick={onLoadDemo}
+        className="rounded-full bg-stone-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-200"
+      >
+        Load demo
+      </button>
     </div>
   );
 }
@@ -676,7 +682,7 @@ export function App() {
         />
         {tab === "dashboard" && (
           <>
-            <DemoBanner onChanged={reload} />
+            {isDemoMode() && <DemoBanner onChanged={reload} />}
             <BackupBanner onOpenSettings={() => setSettingsOpen(true)} />
 
             {error ? (
@@ -684,7 +690,7 @@ export function App() {
             ) : state === null ? (
               <Loading />
             ) : !state.hasData ? (
-              <EmptyState />
+              <EmptyState onLoadDemo={() => void loadDemoData().then(reload)} />
             ) : (
               <>
                 <FxWarningBanner currencies={state.fxWarnings} />

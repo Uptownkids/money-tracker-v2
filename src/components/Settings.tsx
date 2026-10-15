@@ -26,12 +26,13 @@ import {
 import { parseDollarsToMinor } from "../app/quickLog.js";
 import { formatMoney } from "../app/format.js";
 import { decimalsOf } from "../domain/money/currency.js";
-import { isDateOnly, todayLocal } from "../domain/dates/dateOnly.js";
+import { todayLocal } from "../domain/dates/dateOnly.js";
 import {
   getInboxToken,
   getInboxTokenExpiry,
   setInboxToken,
   setInboxTokenExpiry,
+  validateInboxTokenSave,
 } from "../utils/inbox.js";
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "GNF"];
@@ -182,11 +183,12 @@ export function SettingsSheet({
 
   const saveInboxToken = () => {
     setInboxError(null);
-    const expiryRaw = inboxTokenExpiryText.trim();
-    if (expiryRaw !== "" && !isDateOnly(expiryRaw)) {
-      setInboxError("Expiry date isn't valid — use YYYY-MM-DD.");
+    const problem = validateInboxTokenSave(inboxTokenText, inboxTokenExpiryText);
+    if (problem !== null) {
+      setInboxError(problem);
       return;
     }
+    const expiryRaw = inboxTokenExpiryText.trim();
     setInboxToken(inboxTokenText);
     setInboxTokenExpiry(expiryRaw === "" ? null : expiryRaw);
     setInboxSaved(true);

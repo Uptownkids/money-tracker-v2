@@ -15,6 +15,7 @@ import {
   inboxTokenStatus,
   parseInboxFile,
   staleInboxEntries,
+  validateInboxTokenSave,
   type InboxEntry,
 } from "../src/utils/inbox.js";
 import { decideAdjust } from "../src/utils/deepLink.js";
@@ -234,6 +235,22 @@ describe("staleInboxEntries", () => {
     const e = { ...entry("c", "2026-10-15"), date: "bad" as DateOnly, createdAt: "2026-08-01T00:00:00Z" };
     expect(staleInboxEntries([e], [], TODAY).map((x) => x.id)).toEqual(["c"]);
   });
+
+  it("createdAt wins over date: a backdated entry submitted today is not stale", () => {
+    const e = {
+      ...entry("fresh", "2026-01-01"),
+      createdAt: "2026-10-15T12:00:00Z",
+    };
+    expect(staleInboxEntries([e], [], TODAY)).toHaveLength(0);
+  });
+
+  it("an entry enqueued 61 days ago is stale even with a recent transaction date", () => {
+    const e = {
+      ...entry("old-enqueue", "2026-10-15"),
+      createdAt: "2026-08-15T12:00:00Z",
+    };
+    expect(staleInboxEntries([e], [], TODAY).map((x) => x.id)).toEqual(["old-enqueue"]);
+  });
 });
 
 describe("inboxTokenStatus", () => {
@@ -258,6 +275,25 @@ describe("inboxTokenStatus", () => {
 
   it("expiry today warns, not expired", () => {
     expect(inboxTokenStatus("tok", TODAY, TODAY)).toBe("expiring");
+  });
+});
+
+describe("validateInboxTokenSave", () => {
+  it("clearing the token needs no expiry", () => {
+    expect(validateInboxTokenSave("", "")).toBe(null);
+    expect(validateInboxTokenSave("   ", "")).toBe(null);
+  });
+
+  it("saving a token requires an expiry date", () => {
+    expect(validateInboxTokenSave("tok", "")).toMatch(/expiry date/);
+  });
+
+  it("rejects a malformed expiry date", () => {
+    expect(validateInboxTokenSave("tok", "next year")).toMatch(/YYYY-MM-DD/);
+  });
+
+  it("accepts a token with a valid expiry date", () => {
+    expect(validateInboxTokenSave("tok", "2027-10-15")).toBe(null);
   });
 });
 

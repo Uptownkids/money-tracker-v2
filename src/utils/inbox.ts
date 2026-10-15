@@ -225,12 +225,18 @@ export function inboxAdjustToIntent(entry: InboxEntry): AdjustIntent {
   };
 }
 
-/** Effective date for age checks: entry.date, falling back to createdAt. */
-export function inboxEntryAgeDate(entry: InboxEntry): DateOnly | null {  if (isDateOnly(entry.date)) return entry.date;
+/**
+ * Effective date for age checks: when the entry landed in the inbox
+ * (createdAt), falling back to the transaction date. A backdated entry
+ * submitted today is "new" — its inbox age is what matters for the
+ * 60-day stale warning and the 90-day retention.
+ */
+export function inboxEntryAgeDate(entry: InboxEntry): DateOnly | null {
   if (entry.createdAt) {
     const d = entry.createdAt.slice(0, 10);
     if (isDateOnly(d)) return d;
   }
+  if (isDateOnly(entry.date)) return entry.date;
   return null;
 }
 
@@ -322,6 +328,24 @@ export function setInboxToken(token: string): void {
 export function getInboxTokenExpiry(): DateOnly | null {
   const raw = safeGet(TOKEN_EXPIRY_KEY);
   return raw && isDateOnly(raw) ? raw : null;
+}
+
+/**
+ * Validate the Settings save: a token without an expiry date can't warn
+ * before it dies, so saving a token requires its expiry date (GitHub
+ * shows it when the token is created). Clearing the token is always
+ * fine. Returns the error message, or null when the save is valid.
+ */
+export function validateInboxTokenSave(token: string, expiryRaw: string): string | null {
+  if (token.trim() === "") return null;
+  const expiry = expiryRaw.trim();
+  if (expiry === "") {
+    return "Add the token's expiry date — GitHub shows it when you create the token.";
+  }
+  if (!isDateOnly(expiry)) {
+    return "Expiry date isn't valid — use YYYY-MM-DD.";
+  }
+  return null;
 }
 
 export function setInboxTokenExpiry(expiry: DateOnly | null): void {
