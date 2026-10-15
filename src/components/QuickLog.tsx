@@ -33,6 +33,11 @@ import {
   defaultTransactionToBase,
   type TransactionToBase,
 } from "../domain/engine/safeToSpend.js";
+import {
+  attachExpenseToReimbursement,
+  findOpenReimbursementSplit,
+  getOrCreateReimbursementSplit,
+} from "../app/reimbursement.js";
 import { FxRateMemory } from "../domain/money/fx.js";
 import type { MinorUnits } from "../domain/money/money.js";
 
@@ -50,6 +55,35 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const prettyDate = (d: DateOnly): string =>
   `${MONTHS[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8, 10))}, ${d.slice(0, 4)}`;
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+        checked ? "bg-stone-900 dark:bg-stone-100" : "bg-stone-300 dark:bg-stone-600"
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white dark:bg-stone-900 shadow transition-all ${
+          checked ? "left-[22px]" : "left-0.5"
+        }`}
+      />
+    </button>
+  );
+}
 
 /**
  * Earmarked funds per goal id, converted to the user's base currency.
@@ -130,6 +164,8 @@ export function QuickLog({
   const [lastUsedFxRates, setLastUsedFxRates] = useState<Record<string, number>>({});
   // "Paid from goal": "" means none selected.
   const [paidFromGoalId, setPaidFromGoalId] = useState("");
+  // "Reimbursable": attaches the expense to the LA trip reimbursement IOU.
+  const [reimbursable, setReimbursable] = useState(false);
   const [type, setType] = useState<QuickType>("Expense");
   const [amount, setAmount] = useState("");
   const [accountId, setAccountId] = useState("");
@@ -169,6 +205,7 @@ export function QuickLog({
     setBaseCurrency(settings?.baseCurrency ?? "USD");
     setLastUsedFxRates(settings?.lastUsedFxRates ?? {});
     setPaidFromGoalId("");
+    setReimbursable(false);
     const entryType = pf?.type ?? "Expense";
     setType(entryType);
     setAmount(pf?.amount ?? "");
@@ -242,8 +279,12 @@ export function QuickLog({
 
   const switchType = (t: QuickType) => {
     setType(t);
-    // Goal tagging is Expense-only; switching away clears the selection.
-    if (t !== "Expense") setPaidFromGoalId("");
+    // Goal tagging and reimbursement are Expense-only; switching away
+    // clears both.
+    if (t !== "Expense") {
+      setPaidFromGoalId("");
+      setReimbursable(false);
+    }
     if (t !== "Transfer") {
       const kind = t === "Expense" ? "expense" : "income";
       setCategoryId(categories.find((c) => c.kind === kind)?.id ?? "");
@@ -314,7 +355,32 @@ export function QuickLog({
     repos: ReturnType<typeof createRepositories>,
     input: QuickLogInput,
   ) => {
-    await saveQuickLog(repos, input);
+    // Reimbursable trip expense: validate the IOU currency BEFORE saving,
+    // so a mismatch fails loud instead of saving an unattached expense.
+    const wantReimburse = reimbursable && input.type === "Expense";
+    if (wantReimburse) {
+      const acct =
+        accounts.find((a) => a.id === input.accountId) ??
+        (await repos.accounts.getById(input.accountId));
+      const currency = acct?.currency;
+      if (!currency) throw new Error("Pick an account.");
+      const open = findOpenReimbursementSplit(await repos.splits.getAll());
+      if (open && open.currency !== currency) {
+        throw new Error(
+          `The reimbursement IOU is in ${open.currency} — this expense is in ${currency}, so it can't be added.`,
+        );
+      }
+    }
+    const { transaction } = await saveQuickLog(repos, input);
+    if (wantReimburse) {
+      const nowIso = new Date().toISOString();
+      const split = await getOrCreateReimbursementSplit(
+        repos,
+        transaction.currency,
+        nowIso,
+      );
+      await attachExpenseToReimbursement(repos, split.id, transaction);
+    }
     try {
       window.localStorage.setItem(LAST_ACCOUNT_KEY, input.accountId);
     } catch {
@@ -613,6 +679,24 @@ export function QuickLog({
                       </option>
                     ))}
                   </select>
+                </div>
+              )}
+
+              {type === "Expense" && !pendingBill && (
+                <div className="flex items-center justify-between rounded-2xl bg-stone-50 dark:bg-stone-800 px-4 py-3">
+                  <div>
+                    <p className="text-sm font-medium text-stone-900 dark:text-stone-100">
+                      Reimbursable
+                    </p>
+                    <p className="text-xs text-stone-500 dark:text-stone-400">
+                      Adds it to the LA trip reimbursement IOU.
+                    </p>
+                  </div>
+                  <Toggle
+                    checked={reimbursable}
+                    onChange={setReimbursable}
+                    label="Reimbursable"
+                  />
                 </div>
               )}
 

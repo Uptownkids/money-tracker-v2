@@ -16,12 +16,17 @@ import {
   countedIouTotal,
   settleIou,
 } from "../domain/engine/ious.js";
+import {
+  isReimbursementSplit,
+  linkedReimbursementExpenses,
+  settleReimbursement,
+} from "../app/reimbursement.js";
 import { parseDollarsToMinor } from "../app/quickLog.js";
 import { formatMoney } from "../app/format.js";
 import { decimalsOf } from "../domain/money/currency.js";
 import { todayLocal, addDays, type DateOnly } from "../domain/dates/dateOnly.js";
 import { resolvePayCycle } from "../domain/dates/payCycle.js";
-import type { MinorUnits } from "../domain/money/money.js";
+import { sumMinor, type MinorUnits } from "../domain/money/money.js";
 
 const fieldCls =
   "w-full rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2.5 text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:border-stone-400 dark:focus:border-stone-500 focus:outline-none";
@@ -103,6 +108,70 @@ function formatExpectedBy(expectedBy?: DateOnly): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+/**
+ * Expandable receipt list for the reimbursement IOU: the running total
+ * plus every linked expense, so receipts can be matched line by line.
+ */
+function ReceiptsExpander({
+  split,
+  transactions,
+  expanded,
+  onToggle,
+}: {
+  split: Split;
+  transactions: Transaction[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const receipts = linkedReimbursementExpenses(transactions, split.id);
+  const total = sumMinor(receipts.map((t) => t.amount));
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between rounded-xl bg-stone-50 dark:bg-stone-800 px-3 py-2 text-xs text-stone-600 dark:text-stone-400 transition-colors hover:bg-stone-100 dark:hover:bg-stone-700"
+      >
+        <span>
+          {receipts.length} {receipts.length === 1 ? "receipt" : "receipts"} ·{" "}
+          {formatMoney(total, split.currency)}
+        </span>
+        <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <ul className="mt-1 divide-y divide-stone-100 dark:divide-stone-800 rounded-xl ring-1 ring-inset ring-stone-200 dark:ring-stone-700">
+          {receipts.length === 0 ? (
+            <li className="px-3 py-2.5 text-xs text-stone-500 dark:text-stone-400">
+              No receipts yet — toggle Reimbursable on a trip expense in
+              Quick-Log.
+            </li>
+          ) : (
+            receipts.map((t) => (
+              <li
+                key={t.id}
+                className="flex items-center justify-between gap-2 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-stone-900 dark:text-stone-100">
+                    {t.payee || "Expense"}
+                  </p>
+                  <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                    {t.date}
+                  </p>
+                </div>
+                <p className="shrink-0 text-xs font-medium text-stone-900 dark:text-stone-100">
+                  {formatMoney(t.amount, t.currency)}
+                </p>
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function DirectionBadge({ direction }: { direction: IouDirection }) {
@@ -336,19 +405,24 @@ export function SettleIouSheet({
   split,
   accounts,
   linkedExpense,
+  linkedExpenses = [],
   onClose,
   onSettled,
 }: {
   split: Split;
   accounts: Account[];
   linkedExpense: Transaction | undefined;
+  /** Receipt list for reimbursement IOUs (expenses with splitId set). */
+  linkedExpenses?: Transaction[];
   onClose: () => void;
   onSettled: () => Promise<void>;
 }) {
   const owedToMalike = split.direction === "TheyOweMe";
+  const reimbursement = isReimbursementSplit(split);
   const hasLinked = split.linkedTransactionId !== "";
   // Refund only when the linked expense still exists; otherwise a linked
-  // IOU whose expense is gone settles as a plain money-in.
+  // IOU whose expense is gone settles as a plain money-in. Reimbursement
+  // IOUs get their own receipt-checklist mode below.
   const mode: "refund" | "inflow" | "outflow" = owedToMalike
     ? hasLinked && linkedExpense
       ? "refund"
@@ -356,6 +430,16 @@ export function SettleIouSheet({
     : "outflow";
 
   const defaultAccountId = useMemo(() => {
+    if (reimbursement) {
+      // The reimbursement lands in his bank, not on the card the trip
+      // was spent on — default to checking.
+      return (
+        accounts.find((a) => a.type === "Checking")?.id ??
+        accounts.find((a) => a.type === "Cash")?.id ??
+        accounts[0]?.id ??
+        ""
+      );
+    }
     if (
       linkedExpense &&
       accounts.some((a) => a.id === linkedExpense.accountId)
@@ -363,13 +447,31 @@ export function SettleIouSheet({
       return linkedExpense.accountId;
     }
     return accounts[0]?.id ?? "";
-  }, [linkedExpense, accounts]);
+  }, [reimbursement, linkedExpense, accounts]);
 
   const [accountId, setAccountId] = useState(defaultAccountId);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Receipt checklist for reimbursement mode: null means "all checked".
+  const [checkedIds, setCheckedIds] = useState<ReadonlySet<string> | null>(null);
 
   const account = accounts.find((a) => a.id === accountId);
+
+  const isCovered = (id: string): boolean =>
+    checkedIds === null || checkedIds.has(id);
+  const toggleCovered = (id: string) => {
+    setCheckedIds((prev) => {
+      const base = prev ?? new Set(linkedExpenses.map((t) => t.id));
+      const next = new Set(base);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const coveredExpenses = reimbursement
+    ? linkedExpenses.filter((t) => isCovered(t.id))
+    : [];
+  const coveredTotal = sumMinor(coveredExpenses.map((t) => t.amount));
 
   const explainer =
     mode === "refund"
@@ -420,6 +522,173 @@ export function SettleIouSheet({
       setSaving(false);
     }
   };
+
+  /**
+   * Reimbursement settlement: one Refund per checked receipt on the
+   * receiving account. Unchecked receipts are detached and stay as his
+   * own spending.
+   */
+  const saveReimbursement = async () => {
+    setError(null);
+    const target = account;
+    if (!target) {
+      setError("Pick an account.");
+      return;
+    }
+    if (target.currency !== split.currency) {
+      setError(
+        `Pick a ${split.currency} account — ${target.name} is in ${target.currency}.`,
+      );
+      return;
+    }
+    if (coveredExpenses.length === 0) {
+      setError("Check at least one receipt — or settle without recording.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const now = new Date().toISOString();
+      const repos = createRepositories(getActiveDb());
+      await settleReimbursement(repos, {
+        splitId: split.id,
+        coveredExpenseIds: coveredExpenses.map((t) => t.id),
+        receivingAccountId: target.id,
+        date: todayLocal(),
+        nowIso: now,
+      });
+      await onSettled();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save. Try again.");
+      setSaving(false);
+    }
+  };
+
+  if (reimbursement) {
+    return (
+      <SheetShell title="Settle reimbursement" onClose={onClose}>
+        <div className="mt-4 flex flex-col gap-4">
+          <div className="flex items-center justify-between rounded-2xl bg-stone-50 dark:bg-stone-800 px-4 py-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-stone-900 dark:text-stone-100">
+                {split.person}
+              </p>
+              <p className="text-xs text-stone-500 dark:text-stone-400">
+                {linkedExpenses.length}{" "}
+                {linkedExpenses.length === 1 ? "receipt" : "receipts"} ·{" "}
+                {formatMoney(split.amount, split.currency)} claimed
+              </p>
+            </div>
+            <DirectionBadge direction={split.direction} />
+          </div>
+
+          <p className="text-sm leading-relaxed text-stone-600 dark:text-stone-400">
+            Check the receipts this reimbursement covers. Each checked one
+            becomes a refund, so the trip spending nets to zero — never
+            income. Unchecked receipts stay as your own spending.
+          </p>
+
+          {linkedExpenses.length === 0 ? (
+            <p className="text-sm text-stone-500 dark:text-stone-400">
+              No receipts attached yet. Add trip spending with the
+              Reimbursable toggle in Quick-Log.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {linkedExpenses.map((t) => {
+                const checked = isCovered(t.id);
+                return (
+                  <li key={t.id}>
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={checked}
+                      onClick={() => toggleCovered(t.id)}
+                      className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition-colors ${
+                        checked
+                          ? "bg-stone-100 dark:bg-stone-800"
+                          : "bg-white dark:bg-stone-900 opacity-60"
+                      } ring-1 ring-inset ring-stone-200 dark:ring-stone-700`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-xs font-bold text-white dark:text-stone-900 transition-colors ${
+                          checked
+                            ? "bg-stone-900 dark:bg-stone-100"
+                            : "bg-stone-300 dark:bg-stone-600"
+                        }`}
+                      >
+                        {checked ? "✓" : ""}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-stone-900 dark:text-stone-100">
+                          {t.payee || "Expense"}
+                        </span>
+                        <span className="block text-xs text-stone-500 dark:text-stone-400">
+                          {t.date}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-display text-sm text-stone-900 dark:text-stone-100">
+                        {formatMoney(t.amount, t.currency)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          <div>
+            <label htmlFor="iou-reimburse-account" className={labelCls}>
+              Reimbursement landed in
+            </label>
+            <select
+              id="iou-reimburse-account"
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              className={fieldCls}
+            >
+              {accounts.length === 0 && (
+                <option value="">No accounts yet</option>
+              )}
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} · {a.currency}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {error && <p className="text-sm font-medium text-red-700 dark:text-red-300">{error}</p>}
+
+          <button
+            type="button"
+            onClick={() => void saveReimbursement()}
+            disabled={saving || coveredExpenses.length === 0}
+            className="rounded-full bg-stone-900 dark:bg-stone-100 py-3 text-sm font-medium text-white dark:text-stone-900 transition-colors hover:bg-stone-700 dark:hover:bg-stone-200 disabled:opacity-60"
+          >
+            {saving
+              ? "Saving…"
+              : `Record ${coveredExpenses.length} ${coveredExpenses.length === 1 ? "refund" : "refunds"} (${formatMoney(coveredTotal, split.currency)}) & settle`}
+          </button>
+
+          <div className="rounded-2xl bg-stone-50 dark:bg-stone-800 px-4 py-3">
+            <button
+              type="button"
+              onClick={() => void save(false)}
+              disabled={saving}
+              className="text-sm font-medium text-stone-700 dark:text-stone-300 underline decoration-stone-300 underline-offset-2 disabled:opacity-60"
+            >
+              {saving ? "Saving…" : "Settle without recording"}
+            </button>
+            <p className="mt-1 text-xs leading-relaxed text-stone-500 dark:text-stone-400">
+              Marks the IOU settled without touching the ledger. Use this when
+              the money is already logged somewhere else.
+            </p>
+          </div>
+        </div>
+      </SheetShell>
+    );
+  }
 
   return (
     <SheetShell title="Settle IOU" onClose={onClose}>
@@ -523,6 +792,7 @@ export function Ious({ onChanged }: { onChanged: () => void }) {
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [settleSplit, setSettleSplit] = useState<Split | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const repos = createRepositories(getActiveDb());
@@ -666,9 +936,20 @@ export function Ious({ onChanged }: { onChanged: () => void }) {
                     onClick={() => setSettleSplit(s)}
                     className="rounded-full border border-stone-200 dark:border-stone-700 px-3 py-1.5 text-xs font-medium text-stone-700 dark:text-stone-300 transition-colors hover:bg-stone-50 dark:hover:bg-stone-800"
                   >
-                    Settle
+                    {isReimbursementSplit(s) ? "Review & settle" : "Settle"}
                   </button>
                 </div>
+
+                {isReimbursementSplit(s) && (
+                  <ReceiptsExpander
+                    split={s}
+                    transactions={allTransactions}
+                    expanded={expandedId === s.id}
+                    onToggle={() =>
+                      setExpandedId(expandedId === s.id ? null : s.id)
+                    }
+                  />
+                )}
               </div>
             ))}
           </div>
@@ -692,6 +973,10 @@ export function Ious({ onChanged }: { onChanged: () => void }) {
           split={settleSplit}
           accounts={accounts}
           linkedExpense={linkedExpenseOf(settleSplit)}
+          linkedExpenses={linkedReimbursementExpenses(
+            allTransactions,
+            settleSplit.id,
+          )}
           onClose={() => setSettleSplit(null)}
           onSettled={async () => {
             setSettleSplit(null);

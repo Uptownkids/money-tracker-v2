@@ -13,6 +13,7 @@ import {
 } from "../domain/engine/ledger.js";
 import { TransactionEditSheet } from "./TransactionEditSheet.js";
 import { SettleIouSheet } from "./Ious.js";
+import { linkedReimbursementExpenses } from "../app/reimbursement.js";
 import type { DateOnly } from "../domain/dates/dateOnly.js";
 import type { Account } from "../domain/entities/account.js";
 import type { Category } from "../domain/entities/category.js";
@@ -248,6 +249,7 @@ export function IouMoveSheet({
       split={split}
       accounts={accounts}
       linkedExpense={linkedExpense}
+      linkedExpenses={linkedReimbursementExpenses(transactions, split.id)}
       onClose={onClose}
       onSettled={async () => {
         onClose();
