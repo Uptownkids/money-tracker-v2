@@ -65,6 +65,14 @@ export interface PaydayRunState {
      */
     goalsStepDone: boolean;
     cardPaymentDone: boolean;
+    /**
+     * Step 1 (paycheck confirm) is skippable when there is no Scheduled
+     * paycheck row to confirm — e.g. the pay already landed and is inside
+     * an account's starting balance. Skipping records the choice so the
+     * run can proceed to bills/goals; it never creates a transaction.
+     * Optional: runs saved before this field existed read as unskipped.
+     */
+    paycheckSkipped?: boolean;
   };
   completed: boolean;
   createdAt: string;

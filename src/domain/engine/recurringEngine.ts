@@ -118,7 +118,12 @@ export function enumerateOccurrences(
   to: DateOnly,
 ): GeneratedOccurrence[] {
   // remainingOccurrences counts from the rule's nextDueDate forward.
-  const enumFrom = compareDateOnly(from, rule.nextDueDate) < 0 ? from : rule.nextDueDate;
+  // nextDueDate is authoritative: the rule never fires before it. Clamp
+  // the window UP to it — a rule whose next due date is in the future
+  // (e.g. this month's bill is already paid) must not enumerate a
+  // phantom occurrence for today. Overdue bills are still covered: the
+  // catch-up materializes them as Scheduled rows from nextDueDate.
+  const enumFrom = compareDateOnly(from, rule.nextDueDate) < 0 ? rule.nextDueDate : from;
   let dates = canonicalDates(rule, enumFrom, to);
   if (rule.remainingOccurrences !== undefined) {
     dates = dates.slice(0, Math.max(0, rule.remainingOccurrences));

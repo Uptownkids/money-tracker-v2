@@ -58,6 +58,13 @@ export interface MovesContext {
    * `snoozedUntil >= today`.
    */
   snoozed?: ReadonlyMap<string, DateOnly>;
+  /**
+   * Settled (Cleared/Pending) occurrence keys, `p:<ruleId>:<occurrenceDate>`.
+   * A bill whose occurrence is already settled must not keep offering
+   * "Mark paid" — the row exists, and a second tap must be impossible to
+   * reach, not just a no-op. Same key format as the committed-bills merge.
+   */
+  settledOccurrenceKeys?: ReadonlySet<string>;
 }
 
 function formatMoney(amount: MinorUnits, currency: string): string {
@@ -88,6 +95,7 @@ export function rankTodaysMoves(ctx: MovesContext): TodaysMove[] {
   }> = [];
   for (const p of ctx.projectedBills) {
     if (p.kind === "Income") continue;
+    if (ctx.settledOccurrenceKeys?.has(`p:${p.ruleId}:${p.occurrenceDate}`)) continue;
     const rule = ruleById.get(p.ruleId);
     billCandidates.push({
       key: `p:${p.ruleId}:${p.occurrenceDate}`,

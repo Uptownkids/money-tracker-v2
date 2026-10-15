@@ -295,6 +295,9 @@ export async function loadDashboardState(): Promise<DashboardState> {
     splits,
     goals,
     snoozed,
+    // Moves key bill candidates as `p:<ruleId>:<occurrenceDate>`; the
+    // dashboard's settled set is unprefixed, so adapt it here.
+    settledOccurrenceKeys: new Set([...settledOccurrenceKeys].map((k) => `p:${k}`)),
   });
 
   let deficitPauseSuggestion: DashboardState["deficitPauseSuggestion"] = null;

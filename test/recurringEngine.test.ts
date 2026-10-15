@@ -11,6 +11,36 @@ import type { DateOnly } from "../src/domain/dates/dateOnly.js";
 const NOW = "2026-10-15T12:00:00.000Z";
 
 describe("occurrence enumeration", () => {
+  it("never enumerates before a future nextDueDate (no phantom occurrences)", () => {
+    // Malike's Google Workspace case, Oct 15 2026: monthly on the 15th,
+    // next due Nov 15 because October's charge is already paid. Projecting
+    // from Oct 15 must not fabricate an Oct 15 occurrence.
+    const rule = mkRule({ frequency: "monthly", nextDueDate: "2026-11-15" });
+    expect(
+      enumerateOccurrences(rule, [], "2026-10-15", "2026-10-30").map((o) => o.occurrenceDate),
+    ).toEqual([]);
+  });
+
+  it("resumes a monthly schedule at a future nextDueDate", () => {
+    const rule = mkRule({ frequency: "monthly", nextDueDate: "2026-11-15" });
+    expect(
+      enumerateOccurrences(rule, [], "2026-10-15", "2026-12-20").map((o) => o.occurrenceDate),
+    ).toEqual(["2026-11-15", "2026-12-15"]);
+  });
+
+  it("clamps semi-monthly enumeration up to a future nextDueDate", () => {
+    const rule = mkRule({ frequency: "semi-monthly", daysOfMonth: [15, 30], nextDueDate: "2026-10-30" });
+    expect(
+      enumerateOccurrences(rule, [], "2026-10-15", "2026-11-16").map((o) => o.occurrenceDate),
+    ).toEqual(["2026-10-30", "2026-11-15"]);
+  });
+
+  it("generateDueTransactions emits nothing before a future nextDueDate", () => {
+    const rule = mkRule({ kind: "Subscription", frequency: "monthly", nextDueDate: "2026-11-15" });
+    const res = generateDueTransactions(rule, [], [], "2026-10-15", NOW);
+    expect(res.transactions).toHaveLength(0);
+  });
+
   it("handles all frequencies", () => {
     const weekly = mkRule({ frequency: "weekly", nextDueDate: "2026-10-15" });
     expect(enumerateOccurrences(weekly, [], "2026-10-15", "2026-10-29").map((o) => o.occurrenceDate))

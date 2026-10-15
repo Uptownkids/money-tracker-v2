@@ -132,4 +132,34 @@ describe("rankTodaysMoves", () => {
   it("returns nothing on a quiet day", () => {
     expect(rankTodaysMoves(ctx())).toHaveLength(0);
   });
+
+  it("hides a bill move whose occurrence is already settled", () => {
+    // Malike's Oct 15 case: the Google Workspace occurrence was marked
+    // paid, but the move kept offering "Mark paid". Settled occurrences
+    // must not produce bill moves at all.
+    const rule = mkRule({ id: "r-ws", name: "Google Workspace", reminderOffsetDays: 3 });
+    const moves = rankTodaysMoves(
+      ctx({
+        rules: [rule],
+        projectedBills: [
+          proj({ ruleId: "r-ws", occurrenceDate: "2026-10-15", date: "2026-10-15", amount: 824, kind: "Subscription" }),
+        ],
+        settledOccurrenceKeys: new Set(["p:r-ws:2026-10-15"]),
+      }),
+    );
+    expect(moves.filter((m) => m.relatedId === "r-ws")).toHaveLength(0);
+  });
+
+  it("still shows the bill move when the occurrence is not settled", () => {
+    const rule = mkRule({ id: "r-ws", name: "Google Workspace", reminderOffsetDays: 3 });
+    const moves = rankTodaysMoves(
+      ctx({
+        rules: [rule],
+        projectedBills: [
+          proj({ ruleId: "r-ws", occurrenceDate: "2026-10-15", date: "2026-10-15", amount: 824, kind: "Subscription" }),
+        ],
+      }),
+    );
+    expect(moves.some((m) => m.relatedId === "r-ws" && m.actions.includes("mark-paid"))).toBe(true);
+  });
 });

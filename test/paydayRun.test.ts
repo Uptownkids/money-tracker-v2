@@ -4,7 +4,9 @@ import {
   completePaydayRun,
   confirmPaydayIncome,
   createPaydayRunState,
+  nextIncompleteStep,
 } from "../src/domain/engine/paydayRun.js";
+import type { MinorUnits } from "../src/domain/money/money.js";
 import { generateDueTransactions } from "../src/domain/engine/recurringEngine.js";
 import { mkAccount, mkRule, mkTransaction } from "./helpers.js";
 
@@ -83,6 +85,7 @@ describe("payday run state", () => {
       goalContributions: {},
       goalsStepDone: false,
       cardPaymentDone: false,
+      paycheckSkipped: false,
     });
     const done = completePaydayRun(run, NOW);
     expect(done.completed).toBe(true);
@@ -95,5 +98,25 @@ describe("payday run state", () => {
     expect(
       mkTransaction({ type: "Income", status: "Scheduled", recurringRuleId: rule.id }).type,
     ).toBe("Income");
+  });
+
+  it("a skipped paycheck counts step 1 as done without a confirmed amount", () => {
+    // Malike's Oct 15 case: the pay already landed and sits inside the
+    // starting balance, so there is no Scheduled row to confirm.
+    const run = createPaydayRunState("2026-10-15", 226341, NOW);
+    expect(nextIncompleteStep(run)).toBe(1);
+    const skipped = { ...run, steps: { ...run.steps, paycheckSkipped: true } };
+    expect(nextIncompleteStep(skipped)).toBe(2);
+    expect(skipped.confirmedAmount).toBeUndefined();
+  });
+
+  it("a confirmed paycheck still takes precedence over the skip flag", () => {
+    const run = createPaydayRunState("2026-10-15", 226341, NOW);
+    const skipped = {
+      ...run,
+      confirmedAmount: 226341 as MinorUnits,
+      steps: { ...run.steps, paycheckSkipped: true },
+    };
+    expect(nextIncompleteStep(skipped)).toBe(2);
   });
 });

@@ -30,6 +30,7 @@ export function createPaydayRunState(
       goalContributions: {},
       goalsStepDone: false,
       cardPaymentDone: false,
+      paycheckSkipped: false,
     },
     completed: false,
     createdAt: nowIso,
@@ -172,14 +173,14 @@ export function settleCardPayment(
 
 /**
  * First incomplete checklist step for a run: 1 = paycheck not confirmed
- * (no confirmedAmount), 2 = bills not set aside, 3 = goals step not
+ * (no confirmedAmount and not skipped), 2 = bills not set aside, 3 = goals step not
  * finished (user pressed Continue or funded everything needing money),
  * 4 = card step not addressed, 5 = all prior steps done — the run is
  * ready for its new daily number. A completed run also returns 5; the
  * caller handles completed runs (summary view) separately.
  */
 export function nextIncompleteStep(run: PaydayRunState): 1 | 2 | 3 | 4 | 5 {
-  if (run.confirmedAmount === undefined) return 1;
+  if (run.confirmedAmount === undefined && !run.steps.paycheckSkipped) return 1;
   if (!run.steps.billsSetAside) return 2;
   if (!run.steps.goalsStepDone) return 3;
   if (!run.steps.cardPaymentDone) return 4;

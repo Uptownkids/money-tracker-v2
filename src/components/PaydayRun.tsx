@@ -89,6 +89,9 @@ interface LoadedData {
   baseCurrency: string;
   expectedAmount: MinorUnits;
   expectedCurrency: string;
+  /** False when no Scheduled income row exists for this occurrence —
+   * the pay is already reflected in balances, so step 1 is skippable. */
+  hasScheduledPaycheck: boolean;
   cycleStart: DateOnly;
   cycleEnd: DateOnly;
 }
@@ -232,6 +235,7 @@ export function PaydayRun({ payDate, paydayRuleId, occurrenceDate, onClose, onCh
         baseCurrency,
         expectedAmount,
         expectedCurrency,
+        hasScheduledPaycheck: generated !== undefined,
         cycleStart,
         cycleEnd,
       });
@@ -337,6 +341,30 @@ export function PaydayRun({ payDate, paydayRuleId, occurrenceDate, onClose, onCh
       setStep(2);
     } catch (e) {
       setStepError(e instanceof Error ? e.message : "Could not confirm the paycheck.");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  // ---- Step 1b: skip when the pay is already counted -------------------------
+  // No Scheduled paycheck row exists for this occurrence — e.g. the money
+  // already landed and sits inside an account's starting balance.
+  // Confirming would double-count it, so the step is skipped explicitly:
+  // no transaction is created, and the run proceeds to bills.
+
+  const skipPaycheck = async () => {
+    if (!run || working) return;
+    setStepError(null);
+    setWorking(true);
+    try {
+      const repos = createRepositories(getActiveDb());
+      await persistRun(repos, {
+        ...run,
+        steps: { ...run.steps, paycheckSkipped: true },
+      });
+      setStep(2);
+    } catch (e) {
+      setStepError(e instanceof Error ? e.message : "Could not skip this step.");
     } finally {
       setWorking(false);
     }
@@ -645,6 +673,7 @@ export function PaydayRun({ payDate, paydayRuleId, occurrenceDate, onClose, onCh
                   error={stepError}
                   working={working}
                   onConfirm={() => void confirmPaycheck()}
+                  onSkip={() => void skipPaycheck()}
                 />
               )}
               {step === 2 && (
@@ -771,10 +800,13 @@ function buildBillRows(data: LoadedData): BillRow[] {
 }
 
 function RunSummary({ run, data, onClose }: { run: PaydayRunState; data: LoadedData; onClose: () => void }) {
+  const paycheckSkipped = run.confirmedAmount === undefined && run.steps.paycheckSkipped === true;
   const steps: { label: string; done: boolean }[] = [
     {
-      label: `Paycheck confirmed${run.confirmedAmount !== undefined ? ` · ${formatMoney(run.confirmedAmount, data.expectedCurrency)}` : ""}`,
-      done: run.confirmedAmount !== undefined,
+      label: paycheckSkipped
+        ? "Paycheck skipped · already in balances"
+        : `Paycheck confirmed${run.confirmedAmount !== undefined ? ` · ${formatMoney(run.confirmedAmount, data.expectedCurrency)}` : ""}`,
+      done: run.confirmedAmount !== undefined || paycheckSkipped,
     },
     { label: "Bills set aside", done: run.steps.billsSetAside },
     {
@@ -828,9 +860,11 @@ function StepConfirmPaycheck(props: {
   error: string | null;
   working: boolean;
   onConfirm: () => void;
+  onSkip: () => void;
 }) {
-  const { data, amountInput, setAmountInput, payStatus, setPayStatus, error, working, onConfirm } = props;
+  const { data, amountInput, setAmountInput, payStatus, setPayStatus, error, working, onConfirm, onSkip } = props;
   const already = props.run.confirmedAmount !== undefined;
+  const skipped = !already && props.run.steps.paycheckSkipped === true;
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 p-4">
@@ -854,6 +888,38 @@ function StepConfirmPaycheck(props: {
             The scheduled paycheck row was updated in place.
           </p>
         </div>
+      ) : skipped ? (
+        <div className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 p-4">
+          <p className="text-sm font-medium text-stone-800 dark:text-stone-200">
+            Skipped — already in your balances
+          </p>
+          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+            No scheduled paycheck row existed for this date, so there was nothing to confirm.
+            The run continued without adding any transaction.
+          </p>
+        </div>
+      ) : !data.hasScheduledPaycheck ? (
+        <>
+          <div className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 p-4">
+            <p className="text-sm font-medium text-stone-800 dark:text-stone-200">
+              No scheduled paycheck found for this date
+            </p>
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+              This usually means the pay already landed and is reflected in your balances.
+              Confirming it again would count it twice. Skip this step to continue the run
+              without adding anything.
+            </p>
+          </div>
+          {error && <p className="text-sm font-medium text-red-700 dark:text-red-300">{error}</p>}
+          <button
+            type="button"
+            onClick={onSkip}
+            disabled={working}
+            className={secondaryBtn}
+          >
+            {working ? "Skipping…" : "Skip — already in my balances"}
+          </button>
+        </>
       ) : (
         <>
           <div>
