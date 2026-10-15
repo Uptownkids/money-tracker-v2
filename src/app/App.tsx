@@ -34,6 +34,8 @@ import { BillMoveSheet, IouMoveSheet } from "../components/MoveSheets.js";
 import { DemoBanner } from "../components/DemoBanner.js";
 import { QuickLog, type QuickLogPrefill } from "../components/QuickLog.js";
 import { DeepLinkAdjust } from "../components/DeepLinkAdjust.js";
+import { InboxSection } from "../components/Inbox.js";
+import { markInboxEntryApplied } from "../data/inbox.js";
 import { EverythingLog } from "../components/EverythingLog.js";
 import { Accounts } from "../components/Accounts.js";
 import { RecurringRules } from "../components/RecurringRules.js";
@@ -285,6 +287,11 @@ export function App() {
     intent: AdjustIntent;
     accountId: string;
   } | null>(null);
+  // Private inbox (Step 2): refreshKey bumps to refetch; pendingInboxAdjustId
+  // tracks an adjust entry being approved so it can be marked applied once
+  // the correction is recorded (dismissing without confirming leaves it pending).
+  const [inboxRefreshKey, setInboxRefreshKey] = useState(0);
+  const [pendingInboxAdjustId, setPendingInboxAdjustId] = useState<string | null>(null);
 
   // Service worker updates: show the banner when a new version is waiting.
   // onSwUpdate fires immediately if an update is already waiting, so late
@@ -565,13 +572,36 @@ export function App() {
 
   const consumePrefill = useCallback(() => setQuickLogPrefill(null), []);
 
+  const markInboxApplied = useCallback((id: string) => {
+    void (async () => {
+      await markInboxEntryApplied(createRepositories(getDb()), id);
+      setInboxRefreshKey((k) => k + 1);
+    })();
+  }, []);
+
+  const handleInboxPrefill = useCallback((prefill: QuickLogPrefill) => {
+    setQuickLogPrefill(prefill);
+  }, []);
+
+  const handleInboxAdjust = useCallback(
+    (intent: AdjustIntent, accountId: string, inboxEntryId: string) => {
+      setPendingInboxAdjustId(inboxEntryId);
+      setAdjustDialog({ intent, accountId });
+    },
+    [],
+  );
+
   const onAdjustApplied = useCallback(
     (message: string) => {
+      if (pendingInboxAdjustId) {
+        markInboxApplied(pendingInboxAdjustId);
+        setPendingInboxAdjustId(null);
+      }
       setAdjustDialog(null);
       showToast(message);
       reload();
     },
-    [reload, showToast],
+    [reload, showToast, pendingInboxAdjustId, markInboxApplied],
   );
 
   // Theme + bill notifications, once on mount.
@@ -676,6 +706,12 @@ export function App() {
                   balances={state.balances}
                   onSelectAccount={() => setTab("accounts")}
                 />
+                <InboxSection
+                  refreshKey={inboxRefreshKey}
+                  onPrefill={handleInboxPrefill}
+                  onAdjust={handleInboxAdjust}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                />
                 <Upcoming onOpenItem={() => setTab("log")} />
                 <Ious onChanged={reload} />
                 <p className="pt-2 text-center text-xs text-stone-400">
@@ -708,13 +744,17 @@ export function App() {
         onSaved={reload}
         prefill={quickLogPrefill}
         onPrefillConsumed={consumePrefill}
+        onInboxEntrySaved={markInboxApplied}
       />
 
       {adjustDialog && (
         <DeepLinkAdjust
           intent={adjustDialog.intent}
           accountId={adjustDialog.accountId}
-          onClose={() => setAdjustDialog(null)}
+          onClose={() => {
+            setAdjustDialog(null);
+            setPendingInboxAdjustId(null);
+          }}
           onApplied={onAdjustApplied}
         />
       )}

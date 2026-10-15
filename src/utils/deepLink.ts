@@ -15,6 +15,7 @@
 import { isDateOnly, type DateOnly } from "../domain/dates/dateOnly.js";
 import { decimalsOf } from "../domain/money/currency.js";
 import type { MinorUnits } from "../domain/money/money.js";
+import { toStoredBalance, type AccountType } from "../domain/entities/account.js";
 
 export type DeepLinkEntryType = "Expense" | "Income";
 
@@ -32,7 +33,11 @@ export interface AddIntent {
 export interface AdjustIntent {
   kind: "adjust";
   accountName: string;
-  /** Validated decimal string, e.g. "30". */
+  /**
+   * Validated signed decimal string, e.g. "30" or "-15.50" (negative
+   * allowed for asset accounts — overdrawn. Card/loan negatives are
+   * rejected by decideAdjust with a proper message).
+   */
   balanceText: string;
 }
 
@@ -63,19 +68,20 @@ function isPositiveDecimal(text: string): boolean {
   return isDecimalNumber(text) && Number(text) > 0;
 }
 
-/** Decimal string that parses to a finite number >= 0 (balance can be 0). */
-function isNonNegativeDecimal(text: string): boolean {
-  return isDecimalNumber(text) && Number(text) >= 0;
+/** Signed decimal: optional leading "-" (asset accounts can be overdrawn). */
+function isSignedDecimal(text: string): boolean {
+  const t = text.startsWith("-") ? text.slice(1) : text;
+  return isDecimalNumber(t);
 }
 
-type AccountMatch = { ok: true; name: string } | { ok: false; error: string };
+export type AccountMatch = { ok: true; name: string } | { ok: false; error: string };
 
 /**
  * Match a link's account parameter against real account names,
  * case-insensitive. Zero matches or more than one match is an error —
- * the link never guesses.
+ * the link never guesses. Also used by the inbox approval flow.
  */
-function matchAccountName(
+export function matchAccountName(
   accountNames: readonly string[],
   raw: string,
 ): AccountMatch {
@@ -183,8 +189,10 @@ function parseAdjust(
   const balanceRaw = params.get("balance");
   if (balanceRaw === null) return fail("missing balance");
   const balanceText = balanceRaw.trim();
-  if (!isNonNegativeDecimal(balanceText)) {
-    return fail(`balance "${balanceRaw}" isn't a valid number (0 or more)`);
+  // Signed decimal allowed here; decideAdjust rejects negatives for
+  // card/loan accounts ("enter the amount owed as a positive number").
+  if (!isSignedDecimal(balanceText)) {
+    return fail(`balance "${balanceRaw}" isn't a valid number`);
   }
 
   return {
@@ -222,23 +230,71 @@ export function parseDeepLink(
 
 export type AdjustDecision =
   | { kind: "match" }
-  | { kind: "spending"; differenceMinor: MinorUnits }
-  | { kind: "income"; differenceMinor: MinorUnits };
+  | { kind: "unlogged-spending"; differenceMinor: MinorUnits }
+  | { kind: "money-appeared"; differenceMinor: MinorUnits }
+  | { kind: "correction"; differenceMinor: MinorUnits }
+  | { kind: "invalid"; error: string };
+
+export interface DecideAdjustInput {
+  accountType: AccountType;
+  /** Stored balance (negative for card/loan debt). */
+  appBalanceMinor: MinorUnits;
+  /** Raw user input, e.g. "30" or "-15.50" for an overdrawn asset account. */
+  statedText: string;
+  currency: string;
+}
 
 /**
- * Balance-correction math: compare the app's derived balance against the
- * stated balance. Positive diff (stated above app) is unlogged income;
- * negative diff (app above stated) is unlogged spending. Pure.
+ * Balance-correction math with account-type semantics.
+ *
+ * - Asset accounts (Cash/Checking/...): the stated text is the balance as
+ *   the user sees it; a leading "-" is allowed (overdrawn). diff < 0
+ *   (money missing) -> unlogged-spending; diff > 0 (money appeared) ->
+ *   money-appeared, which the dialog resolves into a Refund, an IOU
+ *   repayment, forgotten income, or a tagged balance correction — never
+ *   an automatic Income.
+ * - Card/Loan accounts: the stated text is the amount OWED (>= 0).
+ *   Negative input is rejected. diff < 0 (owed went up) ->
+ *   unlogged-spending on the card; diff > 0 (owed went down) ->
+ *   correction inflow, tagged so it never counts as income.
+ *
+ * Pure.
  */
-export function decideAdjust(
-  appBalanceMinor: MinorUnits,
-  statedBalanceMinor: MinorUnits,
-): AdjustDecision {
-  const diff = statedBalanceMinor - appBalanceMinor;
+export function decideAdjust(input: DecideAdjustInput): AdjustDecision {
+  const { accountType, appBalanceMinor, statedText, currency } = input;
+  const isLiability = accountType === "CreditCard" || accountType === "Loan";
+  const text = statedText.trim();
+  if (isLiability && text.startsWith("-")) {
+    return { kind: "invalid", error: "enter the amount owed as a positive number" };
+  }
+  const minor = parseSignedBalanceToMinor(text, currency);
+  if (minor === null) {
+    return { kind: "invalid", error: `"${text}" isn't a valid amount` };
+  }
+  const statedStored = isLiability ? toStoredBalance(accountType, minor) : minor;
+  const diff = statedStored - appBalanceMinor;
   if (diff === 0) return { kind: "match" };
-  return diff < 0
-    ? { kind: "spending", differenceMinor: -diff as MinorUnits }
-    : { kind: "income", differenceMinor: diff as MinorUnits };
+  if (diff < 0) {
+    return { kind: "unlogged-spending", differenceMinor: -diff as MinorUnits };
+  }
+  return isLiability
+    ? { kind: "correction", differenceMinor: diff as MinorUnits }
+    : { kind: "money-appeared", differenceMinor: diff as MinorUnits };
+}
+
+/**
+ * parseBalanceToMinor that also accepts a leading "-" (asset accounts
+ * only — card/loan negatives are rejected by decideAdjust before this
+ * is reached with a minus sign... actually no: this is shared, so it
+ * just parses; the caller decides what's allowed).
+ */
+function parseSignedBalanceToMinor(text: string, currency: string): MinorUnits | null {
+  const t = text.trim();
+  const negative = t.startsWith("-");
+  const unsigned = negative ? t.slice(1) : t;
+  const minor = parseBalanceToMinor(unsigned, currency);
+  if (minor === null) return null;
+  return (negative ? -minor : minor) as MinorUnits;
 }
 
 /**

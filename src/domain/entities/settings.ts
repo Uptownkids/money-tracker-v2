@@ -21,6 +21,13 @@ export interface Settings {
   // Last-used FX rate per pair ("EUR->USD" -> rate), persisted so the
   // converter can fall back to it when an account has no fxRateToBase.
   lastUsedFxRates?: Record<string, number>;
+  /**
+   * IDs of private-inbox entries already approved. An entry is never
+   * applied twice, even across restarts or backup restores. The inbox
+   * token itself lives in localStorage (never here) so it can't leak
+   * into a JSON backup export.
+   */
+  appliedInboxIds?: string[];
 }
 
 // Start-of-day safe-to-spend snapshot. Written once when the day's number

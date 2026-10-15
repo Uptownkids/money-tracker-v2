@@ -101,16 +101,25 @@ export interface QuickLogPrefill {
   payee: string;
   accountId: string;
   date: DateOnly;
+  /**
+   * When the prefill came from a private-inbox entry, its id. Reported
+   * back through onInboxEntrySaved when the entry is saved, so the App
+   * can mark it applied exactly once. Dismissing without saving clears
+   * it — the entry stays pending.
+   */
+  inboxEntryId?: string;
 }
 
 export function QuickLog({
   onSaved,
   prefill,
   onPrefillConsumed,
+  onInboxEntrySaved,
 }: {
   onSaved: () => void;
   prefill?: QuickLogPrefill | null;
   onPrefillConsumed?: () => void;
+  onInboxEntrySaved?: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -131,6 +140,9 @@ export function QuickLog({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Inbox entry id for the current open session: set when the sheet opens
+  // from an inbox prefill, reported on save, cleared on close.
+  const [activeInboxEntryId, setActiveInboxEntryId] = useState<string | null>(null);
   // Touched flags: blur prefill never clobbers fields the user set manually.
   const [touchedAccount, setTouchedAccount] = useState(false);
   const [touchedCategory, setTouchedCategory] = useState(false);
@@ -185,6 +197,7 @@ export function QuickLog({
     setTouchedCategory(false);
     setPendingBill(null);
     setBillDeclined(false);
+    setActiveInboxEntryId(pf?.inboxEntryId ?? null);
     setOpen(true);
   };
 
@@ -193,6 +206,7 @@ export function QuickLog({
     setError(null);
     setSaved(false);
     setPendingBill(null);
+    setActiveInboxEntryId(null);
   };
 
   // Deep-link prefill: when the App hands us a prefill, open the sheet
@@ -307,6 +321,10 @@ export function QuickLog({
       // storage unavailable; the save itself still succeeded
     }
     setSaved(true);
+    if (activeInboxEntryId) {
+      onInboxEntrySaved?.(activeInboxEntryId);
+      setActiveInboxEntryId(null);
+    }
     window.setTimeout(() => {
       close();
       onSaved();

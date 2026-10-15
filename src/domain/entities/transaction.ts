@@ -62,15 +62,27 @@ export function isSelfTransfer(t: Transaction): boolean {
 }
 
 /**
+ * Tag marking a balance-correction inflow: real money movement, never
+ * earned income. A correction is not an IOU settlement, so faking a
+ * splitId for it is not acceptable — the tag is the honest mechanism.
+ */
+export const BALANCE_CORRECTION_TAG = "balance-correction";
+
+/**
  * True when the row counts as earned income in income totals.
  * An Income row carrying a splitId is an IOU-settlement inflow: money in
  * (it raises the account balance), but NOT income — any "count on it"
  * amount was already added to available, so counting it would double
- * count. Use this helper, never a bare `type === "Income"` check, at any
- * site with earned-income semantics.
+ * count. A balance-correction inflow is likewise money movement, not
+ * earnings. Use this helper, never a bare `type === "Income"` check, at
+ * any site with earned-income semantics.
  */
 export function countsAsIncome(t: Transaction): boolean {
-  return t.type === "Income" && t.splitId == null;
+  return (
+    t.type === "Income" &&
+    t.splitId == null &&
+    !(t.tags ?? []).includes(BALANCE_CORRECTION_TAG)
+  );
 }
 
 /** True when the row affects account balances (Pending or Cleared). */

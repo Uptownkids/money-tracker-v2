@@ -35,6 +35,11 @@ export interface QuickLogInput {
    * a quick-logged expense turns out to be a bill payment (see findBillMatch).
    */
   settleScheduledId?: string;
+  /**
+   * Tags attached to the created row, e.g. BALANCE_CORRECTION_TAG for a
+   * "just correct the balance" inflow so countsAsIncome() excludes it.
+   */
+  tags?: string[];
 }
 
 export interface QuickLogResult {
@@ -168,7 +173,7 @@ export async function saveQuickLog(repos: Repositories, input: QuickLogInput): P
     payee: input.payee,
     status: "Cleared",
     notes: input.notes ?? "",
-    tags: [],
+    tags: input.tags ?? [],
     createdAt: now,
     updatedAt: now,
   };

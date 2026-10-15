@@ -211,7 +211,12 @@ describe("parseDeepLink — ?adjust=", () => {
     expect(intent.balanceText).toBe("0");
   });
 
-  it.each(["-5", "abc", ""])("rejects bad balance %p", (balance) => {
+  it("allows a negative balance (overdrawn asset account; cards reject it in decideAdjust)", () => {
+    const intent = ok(parseDeepLink("?adjust=Cash&balance=-50", NAMES, TODAY)) as AdjustIntent;
+    expect(intent.balanceText).toBe("-50");
+  });
+
+  it.each(["abc", ""])("rejects bad balance %p", (balance) => {
     expect(
       err(parseDeepLink(`?adjust=Cash&balance=${encodeURIComponent(balance)}`, NAMES, TODAY)),
     ).toMatch(/balance/);
@@ -237,23 +242,106 @@ describe("parseDeepLink — ?adjust=", () => {
 });
 
 describe("decideAdjust", () => {
-  it("app above stated is unlogged spending with the positive difference", () => {
-    const d = decideAdjust(10000 as MinorUnits, 3000 as MinorUnits);
-    expect(d).toEqual({ kind: "spending", differenceMinor: 7000 });
+  const decide = (
+    accountType: "Checking" | "CreditCard" | "Loan" | "Cash",
+    appBalanceMinor: number,
+    statedText: string,
+  ) =>
+    decideAdjust({
+      accountType,
+      appBalanceMinor: appBalanceMinor as MinorUnits,
+      statedText,
+      currency: "USD",
+    });
+
+  it("asset: app above stated is unlogged spending with the positive difference", () => {
+    expect(decide("Checking", 10000, "30")).toEqual({
+      kind: "unlogged-spending",
+      differenceMinor: 7000,
+    });
   });
 
-  it("stated above app is unlogged income with the positive difference", () => {
-    const d = decideAdjust(2000 as MinorUnits, 5000 as MinorUnits);
-    expect(d).toEqual({ kind: "income", differenceMinor: 3000 });
+  it("asset: stated above app is money-appeared, not income", () => {
+    expect(decide("Checking", 2000, "50")).toEqual({
+      kind: "money-appeared",
+      differenceMinor: 3000,
+    });
   });
 
-  it("equal balances match with nothing to record", () => {
-    expect(decideAdjust(3000 as MinorUnits, 3000 as MinorUnits)).toEqual({ kind: "match" });
+  it("asset: equal balances match with nothing to record", () => {
+    expect(decide("Checking", 3000, "30")).toEqual({ kind: "match" });
   });
 
-  it("a one-cent difference still counts", () => {
-    const d = decideAdjust(3000 as MinorUnits, 3001 as MinorUnits);
-    expect(d).toEqual({ kind: "income", differenceMinor: 1 });
+  it("asset: a one-cent difference still counts", () => {
+    expect(decide("Checking", 3000, "30.01")).toEqual({
+      kind: "money-appeared",
+      differenceMinor: 1,
+    });
+  });
+
+  it("asset: overdrawn stated (negative) is allowed", () => {
+    // App shows $100, he says -$50: $150 missing.
+    expect(decide("Checking", 10000, "-50")).toEqual({
+      kind: "unlogged-spending",
+      differenceMinor: 15000,
+    });
+  });
+
+  it("asset: negative stated below app balance is money-appeared", () => {
+    // App shows -$100 (overdrawn), he says -$40: $60 appeared.
+    expect(decide("Checking", -10000, "-40")).toEqual({
+      kind: "money-appeared",
+      differenceMinor: 6000,
+    });
+  });
+
+  it("card: stated owed higher than app is unlogged spending", () => {
+    // App shows $934.92 owed (stored -93492), he says $1000 owed.
+    expect(decide("CreditCard", -93492, "1000")).toEqual({
+      kind: "unlogged-spending",
+      differenceMinor: 6508,
+    });
+  });
+
+  it("card: stated owed lower than app is a correction, never income", () => {
+    // Owes $934.92 in the app, really owes $800: $134.92 paydown.
+    const d = decide("CreditCard", -93492, "800");
+    expect(d).toEqual({ kind: "correction", differenceMinor: 13492 });
+    expect(d.kind).not.toBe("money-appeared");
+  });
+
+  it("card: matching owed amount is a match", () => {
+    expect(decide("CreditCard", -93492, "934.92")).toEqual({ kind: "match" });
+  });
+
+  it("card: negative stated is rejected with the owed-as-positive message", () => {
+    expect(decide("CreditCard", -93492, "-50")).toEqual({
+      kind: "invalid",
+      error: "enter the amount owed as a positive number",
+    });
+  });
+
+  it("loan: owed down is a correction", () => {
+    expect(decide("Loan", -148835, "1400")).toEqual({
+      kind: "correction",
+      differenceMinor: 8835,
+    });
+  });
+
+  it("garbage stated text is invalid", () => {
+    const d = decide("Checking", 10000, "abc");
+    expect(d.kind).toBe("invalid");
+    if (d.kind === "invalid") expect(d.error).toMatch(/isn't a valid amount/);
+  });
+
+  it("stated text with too many decimals for the currency is invalid", () => {
+    const d = decideAdjust({
+      accountType: "Checking",
+      appBalanceMinor: 10000 as MinorUnits,
+      statedText: "30.001",
+      currency: "USD",
+    });
+    expect(d.kind).toBe("invalid");
   });
 });
 

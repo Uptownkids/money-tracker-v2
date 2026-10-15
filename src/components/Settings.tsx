@@ -26,7 +26,13 @@ import {
 import { parseDollarsToMinor } from "../app/quickLog.js";
 import { formatMoney } from "../app/format.js";
 import { decimalsOf } from "../domain/money/currency.js";
-import { todayLocal } from "../domain/dates/dateOnly.js";
+import { isDateOnly, todayLocal } from "../domain/dates/dateOnly.js";
+import {
+  getInboxToken,
+  getInboxTokenExpiry,
+  setInboxToken,
+  setInboxTokenExpiry,
+} from "../utils/inbox.js";
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "GNF"];
 
@@ -54,6 +60,7 @@ function defaultSettings(): SettingsEntity {
 
 const inputCls =
   "w-full rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-900 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100";
+const labelCls = "mb-1.5 block text-xs font-medium text-stone-500 dark:text-stone-400";
 const primaryBtnCls =
   "rounded-full bg-stone-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-200 disabled:opacity-60";
 const secondaryBtnCls =
@@ -133,6 +140,12 @@ export function SettingsSheet({
   const [importState, setImportState] = useState<ImportState>({ stage: "idle" });
   const [exporting, setExporting] = useState(false);
   const [notifNote, setNotifNote] = useState<string | null>(null);
+  // Private inbox token: localStorage only, never IndexedDB, so it can't
+  // leak into a JSON backup export.
+  const [inboxTokenText, setInboxTokenText] = useState("");
+  const [inboxTokenExpiryText, setInboxTokenExpiryText] = useState("");
+  const [inboxSaved, setInboxSaved] = useState(false);
+  const [inboxError, setInboxError] = useState<string | null>(null);
   const [newCatName, setNewCatName] = useState("");
   const [newCatKind, setNewCatKind] = useState<CategoryKind>("expense");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -159,9 +172,25 @@ export function SettingsSheet({
       setImportState({ stage: "idle" });
       setNotifNote(null);
       setBufferSaved(false);
+      setInboxSaved(false);
+      setInboxError(null);
+      setInboxTokenText(getInboxToken() ?? "");
+      setInboxTokenExpiryText(getInboxTokenExpiry() ?? "");
       void load();
     }
   }, [open, load]);
+
+  const saveInboxToken = () => {
+    setInboxError(null);
+    const expiryRaw = inboxTokenExpiryText.trim();
+    if (expiryRaw !== "" && !isDateOnly(expiryRaw)) {
+      setInboxError("Expiry date isn't valid — use YYYY-MM-DD.");
+      return;
+    }
+    setInboxToken(inboxTokenText);
+    setInboxTokenExpiry(expiryRaw === "" ? null : expiryRaw);
+    setInboxSaved(true);
+  };
 
   // Keep the buffer editor in sync when settings arrive.
   useEffect(() => {
@@ -674,6 +703,68 @@ export function SettingsSheet({
                 </div>
                 {notifNote && (
                   <p className="text-xs text-stone-500 dark:text-stone-400">{notifNote}</p>
+                )}
+              </Section>
+
+              <Section
+                title="Inbox"
+                blurb="Lets Rocky send spending entries to a private inbox you approve here. The token never leaves this phone and is never included in backups."
+              >
+                <label className={labelCls} htmlFor="inbox-token">
+                  Inbox token (paste once)
+                </label>
+                <input
+                  id="inbox-token"
+                  type="password"
+                  autoComplete="off"
+                  value={inboxTokenText}
+                  onChange={(e) => {
+                    setInboxTokenText(e.target.value);
+                    setInboxSaved(false);
+                  }}
+                  placeholder="github_pat_…"
+                  className={inputCls}
+                />
+                <div className="mt-3">
+                  <label className={labelCls} htmlFor="inbox-token-expiry">
+                    Token expiry date
+                  </label>
+                  <input
+                    id="inbox-token-expiry"
+                    type="date"
+                    value={inboxTokenExpiryText}
+                    onChange={(e) => {
+                      setInboxTokenExpiryText(e.target.value);
+                      setInboxSaved(false);
+                    }}
+                    className={inputCls}
+                  />
+                </div>
+                {inboxError && (
+                  <p className="mt-2 text-xs font-medium text-red-700 dark:text-red-300">
+                    {inboxError}
+                  </p>
+                )}
+                <div className="mt-3 flex items-center gap-3">
+                  <button type="button" onClick={saveInboxToken} className={primaryBtnCls}>
+                    Save inbox token
+                  </button>
+                  {inboxTokenText.trim() === "" && getInboxToken() && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInboxToken("");
+                        setInboxTokenExpiry(null);
+                        setInboxSaved(true);
+                      }}
+                      className={secondaryBtnCls}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {inboxSaved && (
+                  <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">Saved.</p>
                 )}
               </Section>
             </div>
