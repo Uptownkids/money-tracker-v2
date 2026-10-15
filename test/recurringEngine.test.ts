@@ -188,12 +188,18 @@ describe("projection", () => {
     const inactive = mkRule({ kind: "Bill", name: "Off", active: false });
     const out = projectOccurrences([active, inactive], [], "2026-10-15", "2026-12-15");
     expect(out).toHaveLength(3);
-    expect(out[0]).toMatchObject({ ruleId: active.id, kind: "Bill", isCreditCardPayment: false });
+    expect(out[0]).toMatchObject({ ruleId: active.id, kind: "Bill", isDebtPayment: false });
   });
 
-  it("flags credit-card-payment rules", () => {
-    const rule = mkRule({ kind: "Bill", isCreditCardPayment: true, nextDueDate: "2026-10-15" });
-    const out = projectOccurrences([rule], [], "2026-10-15", "2026-10-15");
-    expect(out[0]!.isCreditCardPayment).toBe(true);
+  it("treats card and loan payment rules identically (no card flag on projections)", () => {
+    const card = mkRule({ kind: "Bill", isCreditCardPayment: true, payToAccountId: "cc", nextDueDate: "2026-10-15" });
+    const loan = mkRule({ kind: "Bill", payToAccountId: "loan", nextDueDate: "2026-10-15" });
+    const out = projectOccurrences([card, loan], [], "2026-10-15", "2026-10-15");
+    expect(out).toHaveLength(2);
+    // No card-vs-loan distinction survives on the projection: both are
+    // plain debt payments whose minimum lands in committed.
+    expect(out[0]).not.toHaveProperty("isCardPayment");
+    expect(out[0]).not.toHaveProperty("isCreditCardPayment");
+    expect(out.map((p) => p.isDebtPayment)).toEqual([true, true]);
   });
 });

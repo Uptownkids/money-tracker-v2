@@ -9,7 +9,6 @@
  */
 import type { DateOnly } from "../dates/dateOnly.js";
 import type { MinorUnits } from "../money/money.js";
-import type { Account } from "../entities/account.js";
 import type {
   RecurringKind,
   RecurringOverride,
@@ -25,47 +24,18 @@ export interface ProjectedOccurrence {
   /** Currency of the amount (from the rule). Additive to the Phase 1 doc. */
   currency: string;
   kind: RecurringKind;
-  isCreditCardPayment: boolean;
   /** True when the rule is a debt payment (card or loan): keyed on the
    * rule's payToAccountId. Debt-payment rows are Transfers, never
-   * Expenses — for both cards and loans. */
+   * Expenses — for both cards and loans. Card and loan payments are
+   * treated identically: the minimum due lands in committed, and no
+   * balance is ever subtracted from available. */
   isDebtPayment: boolean;
-  /** True when this occurrence is a payment TO A CREDIT CARD (destination
-   * account type is CreditCard) or the legacy isCreditCardPayment flag is
-   * set. Only card payments are excluded from committed: the card balance
-   * is already subtracted from available, so counting the payment would
-   * double-count the same money. Loan payments stay in committed — loan
-   * balances are NOT subtracted from available, so the minimum must be
-   * set aside. */
-  isCardPayment: boolean;
-}
-
-/**
- * True when the rule's debt payment goes TO A CREDIT CARD (or carries the
- * legacy isCreditCardPayment flag). Only card payments are excluded from
- * committed: the card balance is already subtracted from available.
- * Loan-payment rules return false — loan balances are NOT subtracted from
- * available, so the minimum must stay in committed. A payToAccountId that
- * points at a missing account is treated as non-card (safe default: the
- * payment stays set aside).
- */
-export function isCardPaymentRule(
-  rule: RecurringRule,
-  accountTypeOf: (accountId: string) => Account["type"] | undefined,
-): boolean {
-  return (
-    rule.isCreditCardPayment === true ||
-    (rule.payToAccountId !== undefined &&
-      rule.payToAccountId !== "" &&
-      accountTypeOf(rule.payToAccountId) === "CreditCard")
-  );
 }
 
 export function projectOccurrences(  rules: readonly RecurringRule[],
   overrides: readonly RecurringOverride[],
   from: DateOnly,
   to: DateOnly,
-  accountTypeOf?: (accountId: string) => Account["type"] | undefined,
 ): ProjectedOccurrence[] {
   const out: ProjectedOccurrence[] = [];
   for (const rule of rules) {
@@ -82,9 +52,7 @@ export function projectOccurrences(  rules: readonly RecurringRule[],
         amount: occ.amount,
         currency: rule.currency,
         kind: rule.kind,
-        isCreditCardPayment: rule.isCreditCardPayment ?? false,
         isDebtPayment: payTo !== null,
-        isCardPayment: isCardPaymentRule(rule, (id) => accountTypeOf?.(id)),
       });
     }
   }

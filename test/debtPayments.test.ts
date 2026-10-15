@@ -1,15 +1,13 @@
 /**
  * Debt payments (credit-card and loan) are Transfers, never Expenses.
  * Identity is keyed on the rule's payToAccountId: when set, the engine
- * generates Transfer rows to that account. Only CARD payments are excluded
- * from committed in safe-to-spend (the card balance is already subtracted
- * from available, so counting the payment again would double-count).
- * Loan payments stay in committed: loan balances are NOT subtracted from
- * available, so the minimum must be set aside.
+ * generates Transfer rows to that account. Card and loan payments are
+ * treated identically in safe-to-spend: only the minimum due is
+ * committed, and no balance is ever subtracted from available.
  */
 import { describe, expect, it } from "vitest";
 import { generateDueTransactions } from "../src/domain/engine/recurringEngine.js";
-import { isCardPaymentRule, projectOccurrences } from "../src/domain/engine/projection.js";
+import { projectOccurrences } from "../src/domain/engine/projection.js";
 import { deriveBalances } from "../src/domain/engine/balances.js";
 import {
   calculateSafeToSpend,
@@ -116,39 +114,10 @@ describe("debt-payment rules generate Transfers", () => {
     const cardRule = mkRule({ id: "r-card", payToAccountId: "cc", nextDueDate: "2026-10-20" });
     const loanRule = mkRule({ id: "r-loan", payToAccountId: "loan", nextDueDate: "2026-10-20" });
     const plain = mkRule({ id: "r-plain", nextDueDate: "2026-10-20" });
-    const typeOf = (id: string) =>
-      id === "cc" ? ("CreditCard" as const) : id === "loan" ? ("Loan" as const) : undefined;
-    const out = projectOccurrences([cardRule, loanRule, plain], [], "2026-10-15", "2026-10-31", typeOf);
+    const out = projectOccurrences([cardRule, loanRule, plain], [], "2026-10-15", "2026-10-31");
     expect(out.find((p) => p.ruleId === "r-card")!.isDebtPayment).toBe(true);
     expect(out.find((p) => p.ruleId === "r-loan")!.isDebtPayment).toBe(true);
     expect(out.find((p) => p.ruleId === "r-plain")!.isDebtPayment).toBe(false);
-    // ...but only the card payment is excluded from committed
-    expect(out.find((p) => p.ruleId === "r-card")!.isCardPayment).toBe(true);
-    expect(out.find((p) => p.ruleId === "r-loan")!.isCardPayment).toBe(false);
-    expect(out.find((p) => p.ruleId === "r-plain")!.isCardPayment).toBe(false);
-  });
-
-  it("isCardPaymentRule keys the committed exclusion on the destination account type", () => {
-    const typeOf = (id: string) =>
-      id === "cc" ? ("CreditCard" as const) : id === "loan" ? ("Loan" as const) : undefined;
-    // payToAccountId -> CreditCard: excluded
-    expect(
-      isCardPaymentRule(mkRule({ payToAccountId: "cc" }), typeOf),
-    ).toBe(true);
-    // payToAccountId -> Loan: stays in committed
-    expect(
-      isCardPaymentRule(mkRule({ payToAccountId: "loan" }), typeOf),
-    ).toBe(false);
-    // legacy flag with no payToAccountId: excluded (defensive)
-    expect(
-      isCardPaymentRule(mkRule({ isCreditCardPayment: true }), typeOf),
-    ).toBe(true);
-    // plain bill: not a card payment
-    expect(isCardPaymentRule(mkRule({}), typeOf)).toBe(false);
-    // payToAccountId pointing at a missing account: safe default, stays in committed
-    expect(
-      isCardPaymentRule(mkRule({ payToAccountId: "gone" }), typeOf),
-    ).toBe(false);
   });
 });
 
@@ -179,19 +148,21 @@ describe("marking a card minimum paid", () => {
     expect(todaySpending).toBe(0);
   });
 
-  it("leaves safe-to-spend available unchanged", () => {
+  it("card balances never reduce safe-to-spend available", () => {
     const { accounts, row } = setup();
     const before = deriveBalances(accounts, [row]); // Scheduled: no balance effect
     const settled = settleInPlace(row, 4700);
     const after = deriveBalances(accounts, [settled]);
-    expect(availableFor(accounts, before)).toBe(50000);
-    expect(availableFor(accounts, after)).toBe(50000);
+    // Only the checking balance counts: the $50,000 owed stays out of
+    // available, and paying $4,700 moves it from chk to the card.
+    expect(availableFor(accounts, before)).toBe(100000);
+    expect(availableFor(accounts, after)).toBe(95300);
   });
 
-  it("excludes the card-payment projection from committed (no double count)", () => {
+  it("commits the card minimum like any other bill", () => {
     const { accounts } = setup();
     const projected = projectOccurrences(
-      [mkRule({ id: "rule-ccmin", payToAccountId: "cc", isCreditCardPayment: true, nextDueDate: "2026-10-20" })],
+      [mkRule({ id: "rule-ccmin", amount: 4700, payToAccountId: "cc", isCreditCardPayment: true, nextDueDate: "2026-10-20" })],
       [],
       "2026-10-15",
       "2026-10-30",
@@ -210,14 +181,16 @@ describe("marking a card minimum paid", () => {
       baseCurrency: "USD",
       convertToBase: USD,
     });
-    expect(r.committed).toBe(0);
+    // Malike's minimums model: the $47 minimum is set aside; the $50,000
+    // balance is not subtracted from available.
+    expect(r.committed).toBe(4700);
+    expect(r.available).toBe(100000);
   });
 });
 
 describe("loan payments", () => {
   it("reduces the loan balance when paid, but the unpaid minimum stays in committed", () => {
     const accounts = [chk(200000), loan(-148835)];
-    const accountTypeOf = (id: string) => accounts.find((a) => a.id === id)?.type;
     const rule = mkRule({
       id: "rule-loanmin",
       name: "Concord minimum",
@@ -233,9 +206,9 @@ describe("loan payments", () => {
     const balances = deriveBalances(accounts, [settled]);
     expect(balances).toEqual({ chk: 173600, loan: -122435 });
 
-    // But the UNPAID minimum is committed: loan balances are not subtracted
-    // from available, so excluding it would never set the money aside.
-    const projected = projectOccurrences([rule], [], "2026-10-15", "2026-10-30", accountTypeOf);
+    // But the UNPAID minimum is committed: no balance is subtracted from
+    // available, so excluding it would never set the money aside.
+    const projected = projectOccurrences([rule], [], "2026-10-15", "2026-10-30");
     const r = calculateSafeToSpend({
       today: "2026-10-15",
       accounts,

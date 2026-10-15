@@ -29,7 +29,7 @@ import { parseDollarsToMinor } from "../app/quickLog.js";
 import { formatMoney } from "../app/format.js";
 import { addDays, todayLocal, type DateOnly } from "../domain/dates/dateOnly.js";
 import { countPaydays, enumeratePaydays } from "../domain/dates/payCycle.js";
-import { isCardPaymentRule, projectOccurrences } from "../domain/engine/projection.js";
+import { projectOccurrences } from "../domain/engine/projection.js";
 import {
   fundedThisCycle,
   goalTargetDateOrDefault,
@@ -752,24 +752,16 @@ function buildBillRows(data: LoadedData): BillRow[] {
       .filter((t) => t.recurringRuleId && t.occurrenceDate && t.status !== "Scheduled")
       .map((t) => `${t.recurringRuleId}:${t.occurrenceDate}`),
   );
-  // Only CARD payments are excluded here (the dedicated card step handles
-  // them). Loan payments stay in the bills list — loan balances are not
-  // subtracted from available, so the minimum must be set aside.
-  const cardPaymentRuleIds = new Set(
-    activeRules
-      .filter((r) => isCardPaymentRule(r, (id) => accountsById.get(id)?.type))
-      .map((r) => r.id),
-  );
+  // Debt payments (card and loan alike) appear in the bills list: only the
+  // minimum due is set aside. The dedicated Cards step still handles
+  // recording the actual payments.
   const scheduledBills = transactions.filter(
-    (t) =>
-      t.status === "Scheduled" &&
-      t.type !== "Income" &&
-      !(t.recurringRuleId && cardPaymentRuleIds.has(t.recurringRuleId)),
+    (t) => t.status === "Scheduled" && t.type !== "Income",
   );
 
   const byKey = new Map<string, BillRow>();
-  for (const p of projectOccurrences(activeRules, overrides, cycleStart, cycleEnd, (id) => accountsById.get(id)?.type)) {
-    if (p.kind === "Income" || p.isCardPayment) continue;
+  for (const p of projectOccurrences(activeRules, overrides, cycleStart, cycleEnd)) {
+    if (p.kind === "Income") continue;
     if (settledOccurrenceKeys.has(`${p.ruleId}:${p.occurrenceDate}`)) continue;
     byKey.set(`${p.ruleId}:${p.occurrenceDate}`, {
       key: `${p.ruleId}:${p.occurrenceDate}`,

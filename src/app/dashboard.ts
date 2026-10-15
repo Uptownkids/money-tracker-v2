@@ -26,7 +26,7 @@ import {
   type SafeToSpendResult,
   type TransactionToBase,
 } from "../domain/engine/safeToSpend.js";
-import { isCardPaymentRule, projectOccurrences } from "../domain/engine/projection.js";
+import { projectOccurrences } from "../domain/engine/projection.js";
 import { generateDueTransactions } from "../domain/engine/recurringEngine.js";
 import { rankTodaysMoves, type TodaysMove } from "../domain/engine/todaysMoves.js";
 import type { Account } from "../domain/entities/account.js";
@@ -174,33 +174,14 @@ export async function loadDashboardState(): Promise<DashboardState> {
       .filter((t) => t.recurringRuleId && t.occurrenceDate && t.status !== "Scheduled")
       .map((t) => `${t.recurringRuleId}:${t.occurrenceDate}`),
   );
-  const projected = projectOccurrences(
-    activeRules,
-    overrides,
-    today,
-    windowEnd,
-    (id) => accountsById.get(id)?.type,
-  )
+  const projected = projectOccurrences(activeRules, overrides, today, windowEnd)
     .filter((p) => p.kind !== "Income")
     .filter((p) => !settledOccurrenceKeys.has(`${p.ruleId}:${p.occurrenceDate}`));
-  // Only CARD-payment rules are excluded from committed: the card balance
-  // is already subtracted from available, so counting the payment again
-  // would double-count the same money. Loan-payment rules stay in
-  // committed — loan balances are NOT subtracted from available, so the
-  // minimum must be set aside. Keyed on the destination account's type,
-  // never on the transaction type, since debt-payment rows are Transfers.
-  // isCreditCardPayment is kept as a defensive second key for legacy rules
-  // predating payToAccountId.
-  const cardPaymentRuleIds = new Set(
-    activeRules
-      .filter((r) => isCardPaymentRule(r, (id) => accountsById.get(id)?.type))
-      .map((r) => r.id),
-  );
+  // Debt-payment rules (card and loan alike) stay in committed: only the
+  // minimum due is set aside, and no balance is subtracted from
+  // available, so there is nothing to double-count.
   const scheduledBills = transactions.filter(
-    (t) =>
-      t.status === "Scheduled" &&
-      t.type !== "Income" &&
-      !(t.recurringRuleId && cardPaymentRuleIds.has(t.recurringRuleId)),
+    (t) => t.status === "Scheduled" && t.type !== "Income",
   );
 
   // Goal commitments, pinning each cycle's contribution on first use.

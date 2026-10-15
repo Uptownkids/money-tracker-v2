@@ -60,9 +60,7 @@ function proj(o: Partial<ProjectedOccurrence> & { ruleId: string }): ProjectedOc
     amount: 10000,
     currency: "USD",
     kind: "Bill",
-    isCreditCardPayment: false,
     isDebtPayment: false,
-    isCardPayment: false,
     ...o,
   };
 }
@@ -115,7 +113,7 @@ describe("calculateSafeToSpend", () => {
     expect(r.dailyAmount).toBe(6600);
   });
 
-  it("counts credit-card spending against available immediately", () => {
+  it("does not subtract card balances from available (minimums model)", () => {
     const checking = chk("chk", 0);
     const card = mkAccount({ id: "cc", name: "Card", type: "CreditCard", startingBalance: 0, countsAsSpendable: false });
     const balances = deriveBalances([checking, card], [
@@ -123,23 +121,25 @@ describe("calculateSafeToSpend", () => {
       mkTransaction({ accountId: "cc", type: "Expense", amount: 20000, status: "Pending" }),
     ]);
     const r = calculateSafeToSpend(baseInput({ accounts: [checking, card], balances }));
-    expect(r.available).toBe(80000);
-    expect(r.dailyAmount).toBe(5300); // floor(80000/15)=5333 -> $53
+    // The $200 owed stays out of available: only the minimum due is
+    // committed (via the card's payment rule), never the full balance.
+    expect(r.available).toBe(100000);
+    expect(r.dailyAmount).toBe(6600); // floor(100000/15)=6666 -> $66
   });
 
-  it("excludes card-payment rules from committed (no double count)", () => {
+  it("commits the card minimum like any other bill", () => {
     const card = mkAccount({ id: "cc", name: "Card", type: "CreditCard", startingBalance: -20000, countsAsSpendable: false });
     const r = calculateSafeToSpend(
       baseInput({
         accounts: [chk("chk", 0), card],
         balances: { chk: 100000, cc: -20000 },
-        // $47 card payment projected: must NOT land in committed
-        projectedBills: [proj({ ruleId: "ccpay", amount: 4700, isCreditCardPayment: true, isCardPayment: true })],
+        // $47 card minimum projected: set aside, like a loan minimum.
+        projectedBills: [proj({ ruleId: "ccpay", amount: 4700, isDebtPayment: true })],
       }),
     );
-    expect(r.available).toBe(80000);
-    expect(r.committed).toBe(0);
-    expect(r.dailyAmount).toBe(5300);
+    expect(r.available).toBe(100000);
+    expect(r.committed).toBe(4700);
+    expect(r.dailyAmount).toBe(6300); // floor(95300/15)=6353 -> $63
   });
 
   it("counts overdue bills (projected and scheduled)", () => {

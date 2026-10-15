@@ -98,8 +98,9 @@ export interface MergedBill {
 /**
  * Merge projected occurrences with existing Scheduled transactions,
  * deduped on (recurringRuleId, occurrenceDate). The Scheduled row wins
- * on conflict (it may carry an edited amount). Card-payment projections
- * are excluded; scheduledBills must be pre-filtered by the caller.
+ * on conflict (it may carry an edited amount). Debt-payment projections
+ * (card and loan alike) are included: only the minimum due is committed,
+ * never the full balance.
  *
  * Currency: projected amounts are in the rule's currency (rules belong to
  * one account, so this is the account currency). Scheduled rows use
@@ -114,15 +115,6 @@ export function mergeCommittedBills(
 ): MergedBill[] {
   const byKey = new Map<string, MergedBill>();
   for (const p of projectedBills) {
-    // Only CARD payments are excluded from committed: the card balance is
-    // already subtracted from available, so counting the payment again
-    // would double-count the same money. Loan payments stay in committed
-    // — loan balances are NOT subtracted from available, so the minimum
-    // must be set aside. Keyed on the destination account's type, never on
-    // the transaction type, since debt-payment rows are Transfers.
-    // isCreditCardPayment is kept as a defensive second key for legacy
-    // rules predating payToAccountId.
-    if (p.isCardPayment) continue;
     byKey.set(`${p.ruleId}:${p.occurrenceDate}`, {
       amount: convertToBase(p.amount, p.currency),
       ruleId: p.ruleId,
@@ -187,19 +179,19 @@ export function calculateSafeToSpend(input: SafeToSpendInput): SafeToSpendResult
     accountCurrencyOf,
   } = input;
 
-  // available = spendable balances - card balances owed + counted IOUs
+  // available = spendable balances + counted IOUs. Card and loan balances
+  // are never subtracted: only the minimum due is committed (via the
+  // debt-payment rules), so the daily number reflects minimums, not a
+  // full payoff.
   let spendableBase = 0;
-  let cardBase = 0;
   for (const a of accounts) {
     const bal = balances[a.id] ?? 0;
     const base = convertToBase(bal, a.currency, a);
-    if (a.type === "CreditCard") {
-      cardBase = cardBase + base; // stored negative (owed)
-    } else if (a.countsAsSpendable) {
+    if (a.countsAsSpendable) {
       spendableBase = spendableBase + base;
     }
   }
-  const available = spendableBase + cardBase + countedIous;
+  const available = spendableBase + countedIous;
 
   // committed = bills + goals + buffer
   const merged = mergeCommittedBills(

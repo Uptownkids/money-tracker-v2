@@ -31,10 +31,10 @@ export interface RecurringRule {
 
   // Income only: the primary payday defines the pay cycle for Today.
   isPrimaryPayday?: boolean;
-  // True for a rule whose job is paying a credit card. Such rules are
-  // excluded from committed in safe-to-spend (see below) because the card
-  // balance is already subtracted via available; counting both would
-  // double-count the same money.
+  // Legacy label for a rule whose job is paying a credit card. Kept for
+  // older rules and the Bills sheet; it no longer changes any math —
+  // card and loan payments are treated identically (minimum due in
+  // committed, no balance subtracted from available).
   isCreditCardPayment?: boolean;
 
   // Debt-payment rules: paying a credit card or a loan. The presence of

@@ -27,9 +27,7 @@ function proj(o: Partial<ProjectedOccurrence> & { ruleId: string }): ProjectedOc
     amount: 10000,
     currency: "USD",
     kind: "Bill",
-    isCreditCardPayment: false,
     isDebtPayment: false,
-    isCardPayment: false,
     ...o,
   };
 }
