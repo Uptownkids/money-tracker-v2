@@ -220,6 +220,10 @@ export function migrateFromV1(v1: V1Dashboard, opts: MigrationOptions): Migratio
     return /credit/i.test(name) ? "CreditCard" : "Loan";
   };
   let totalDebtMinor = 0;
+  // Debt name (lowercased) -> liability account id, so historical
+  // bill_payments against a card or loan bill can migrate as Transfers
+  // to the liability instead of Expenses.
+  const liabilityByName = new Map<string, string>();
   for (const d of v1.debts) {
     const type = debtTypeFor(d.name);
     const balanceMinor = dollarsToMinor(d.current_balance);
@@ -227,6 +231,7 @@ export function migrateFromV1(v1: V1Dashboard, opts: MigrationOptions): Migratio
     // v1 debts are amounts owed (positive in); toStoredBalance stores
     // liabilities (credit cards and loans) negative.
     const liability = mkAccount(d.name, type, toStoredBalance(type, balanceMinor), false);
+    liabilityByName.set(d.name.toLowerCase(), liability.id);
     mkRule({
       kind: "Bill",
       name: `${d.name} minimum`,
@@ -310,10 +315,32 @@ export function migrateFromV1(v1: V1Dashboard, opts: MigrationOptions): Migratio
   for (const e of v1.expenses) mkExpense(e, []);
   for (const e of v1.trip_expenses) mkExpense(e, ["la-trip"]);
 
-  // 6. Bill payments -> Expense transactions
+  // 6. Bill payments -> Expense transactions, except payments against a
+  // card or loan bill: those are Transfers to the liability account,
+  // never spending (matches the debt-payment rule semantics in v2).
   const billById = new Map(v1.bills.map((b) => [b.id, b]));
   for (const p of v1.bill_payments ?? []) {
     const bill = billById.get(p.bill_id);
+    const liabilityId = bill ? liabilityByName.get(bill.name.toLowerCase()) : undefined;
+    if (liabilityId) {
+      transactions.push({
+        id: crypto.randomUUID(),
+        type: "Transfer",
+        amount: dollarsToMinor(p.amount),
+        currency: "USD",
+        date: p.paid_date,
+        accountId: cash.id,
+        transferToAccountId: liabilityId,
+        categoryId: null,
+        payee: bill?.name ?? "Bill payment",
+        status: "Cleared",
+        notes: "",
+        tags: [],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+      continue;
+    }
     transactions.push({
       id: crypto.randomUUID(),
       type: "Expense",

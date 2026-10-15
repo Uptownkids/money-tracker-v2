@@ -23,6 +23,7 @@ import type { Goal } from "../domain/entities/goal.js";
 import type { RecurringRule } from "../domain/entities/recurringRule.js";
 import type { Settings } from "../domain/entities/settings.js";
 import type { MinorUnits } from "../domain/money/money.js";
+import { deriveBalances } from "../domain/engine/balances.js";
 import type { Repositories } from "../data/repositories/index.js";
 import { createRepositories } from "../data/repositories/index.js";
 import { getDb, setDemoMode } from "../data/db.js";
@@ -131,6 +132,10 @@ const normZero = (n: number): number => (Object.is(n, -0) ? 0 : n);
 /**
  * Reconcile a v1 backup against the in-memory result of migrateFromV1.
  * One row per v1 balance: cash, savings (when present), each debt.
+ * The v2 side is the DERIVED balance (starting balance plus
+ * on-or-after-startingDate transactions) — v1's current_cash already
+ * reflects the migrated pre-migration expenses, and the balance engine
+ * ignores those, so the derived balance must equal current_cash.
  * Debts are stored negative in v2 while v1 carries the amount owed
  * positive, so a debt row diffs as v1Minor + v2Minor; everything else
  * diffs as v1Minor - v2Minor. Full match means every diff is 0 and the
@@ -139,6 +144,11 @@ const normZero = (n: number): number => (Object.is(n, -0) ? 0 : n);
 export function reconciliationDiffs(v1: V1Dashboard, migrated: MigrationResult): ReconciliationRow[] {
   const rows: ReconciliationRow[] = [];
   const accountByName = new Map(migrated.accounts.map((a) => [a.name, a]));
+  const derived = deriveBalances(migrated.accounts, migrated.transactions);
+  const derivedByName = (name: string): MinorUnits => {
+    const a = accountByName.get(name);
+    return a ? (derived[a.id] ?? 0) : 0;
+  };
   const push = (label: string, v1Minor: MinorUnits, v2Minor: MinorUnits, isDebt: boolean): void => {
     const stored = normZero(v2Minor);
     rows.push({
@@ -151,14 +161,14 @@ export function reconciliationDiffs(v1: V1Dashboard, migrated: MigrationResult):
   push(
     "Cash",
     dollarsToMinor(v1.settings.current_cash ?? 0),
-    accountByName.get("Cash")?.startingBalance ?? 0,
+    derivedByName("Cash"),
     false,
   );
   if ((v1.savings_total ?? 0) > 0) {
     push(
       "Savings",
       dollarsToMinor(v1.savings_total),
-      accountByName.get("Savings")?.startingBalance ?? 0,
+      derivedByName("Savings"),
       false,
     );
   }
@@ -166,7 +176,7 @@ export function reconciliationDiffs(v1: V1Dashboard, migrated: MigrationResult):
     push(
       d.name,
       dollarsToMinor(d.current_balance ?? 0),
-      accountByName.get(d.name)?.startingBalance ?? 0,
+      derivedByName(d.name),
       true,
     );
   }

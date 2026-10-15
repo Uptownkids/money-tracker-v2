@@ -13,7 +13,7 @@ import type { DateOnly } from "../dates/dateOnly.js";
 import { compareDateOnly, dayOfMonth } from "../dates/dateOnly.js";
 import type { MinorUnits } from "../money/money.js";
 import { addMinor } from "../money/money.js";
-import { destinationDelta, primaryDelta } from "./balances.js";
+import { destinationDelta, isBeforeTrackingStarted, primaryDelta } from "./balances.js";
 import type { RecurringOverride, RecurringRule } from "../entities/recurringRule.js";
 import { overrideId } from "../entities/recurringRule.js";
 import type { Transaction } from "../entities/transaction.js";
@@ -22,15 +22,17 @@ import { affectsBalance } from "../entities/transaction.js";
 /**
  * Map of tx.id -> balance of tx.accountId AFTER this transaction, in the
  * account's currency. Transactions are applied in chronological order
- * (date ascending, then createdAt ascending). Scheduled rows and rows
- * with an unknown accountId produce no entry. Self-transfers record an
- * entry (balance unchanged).
+ * (date ascending, then createdAt ascending). Scheduled rows, rows with
+ * an unknown accountId, and rows dated before their account's
+ * startingDate produce no entry (the ledger labels those "Before
+ * tracking started"). Self-transfers record an entry (balance unchanged).
  */
 export function computeRunningBalances(
   accounts: readonly Account[],
   transactions: readonly Transaction[],
 ): Record<string, MinorUnits> {
   const running: Record<string, MinorUnits> = {};
+  const byId = new Map(accounts.map((a) => [a.id, a]));
   for (const a of accounts) running[a.id] = a.startingBalance;
 
   const ordered = [...transactions].sort((x, y) => {
@@ -42,10 +44,15 @@ export function computeRunningBalances(
   const out: Record<string, MinorUnits> = {};
   for (const t of ordered) {
     if (!affectsBalance(t)) continue; // Scheduled excluded
-    if (running[t.accountId] === undefined) continue; // unknown account: ignore
+    const account = byId.get(t.accountId);
+    if (!account) continue; // unknown account: ignore
+    if (isBeforeTrackingStarted(account, t.date)) continue; // history only
     running[t.accountId] = addMinor(running[t.accountId] as MinorUnits, primaryDelta(t));
     out[t.id] = running[t.accountId] as MinorUnits;
-    if (t.type === "Transfer" && t.transferToAccountId && running[t.transferToAccountId] !== undefined) {
+    if (t.type === "Transfer" && t.transferToAccountId) {
+      const dest = byId.get(t.transferToAccountId);
+      if (!dest) continue;
+      if (isBeforeTrackingStarted(dest, t.date)) continue; // destination not tracked yet
       running[t.transferToAccountId] = addMinor(
         running[t.transferToAccountId] as MinorUnits,
         destinationDelta(t),

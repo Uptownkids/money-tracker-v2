@@ -512,6 +512,57 @@ describe("saveQuickLog", () => {
       setDemoMode(false);
     }
   });
+
+  it("a backdated entry before the account's startingDate doesn't change the balance", async () => {
+    setDemoMode(false);
+    const realDb = new MoneyTrackerDB(`ql-backdate-${Date.now()}`);
+    try {
+      const repos = createRepositories(realDb);
+      await repos.accounts.put(
+        mkAccount({
+          id: "bd-cash",
+          name: "Cash",
+          type: "Cash",
+          currency: "USD",
+          startingBalance: 50000,
+          startingDate: "2026-10-15" as DateOnly,
+          countsAsSpendable: true,
+        }),
+      );
+      await repos.categories.put(mkCategory({ id: "bd-food", name: "Food", kind: "expense" }));
+
+      // An old receipt from before tracking started: saved to history,
+      // but the $500 starting balance already reflects it.
+      const { transaction } = await saveQuickLog(repos, {
+        type: "Expense",
+        amountMinor: 2000,
+        accountId: "bd-cash",
+        categoryId: "bd-food",
+        payee: "Old receipt",
+        date: "2026-10-01" as DateOnly,
+      });
+      expect(transaction.date).toBe("2026-10-01");
+
+      const accounts = await repos.accounts.getAll();
+      const txs = await repos.transactions.getAll();
+      expect(txs).toHaveLength(1); // still in history
+      expect(deriveBalances(accounts, txs)["bd-cash"]).toBe(50000);
+
+      // Same expense dated today does move the balance.
+      await saveQuickLog(repos, {
+        type: "Expense",
+        amountMinor: 1000,
+        accountId: "bd-cash",
+        categoryId: "bd-food",
+        payee: "Today",
+        date: "2026-10-15" as DateOnly,
+      });
+      const txs2 = await repos.transactions.getAll();
+      expect(deriveBalances(accounts, txs2)["bd-cash"]).toBe(49000);
+    } finally {
+      await realDb.delete();
+    }
+  });
 });
 
 describe("suggestPayee", () => {

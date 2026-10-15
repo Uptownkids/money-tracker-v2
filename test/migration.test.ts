@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { dollarsToMinor, migrateFromV1, type V1Dashboard } from "../src/data/migration/fromV1.js";
 import { generateDueTransactions } from "../src/domain/engine/recurringEngine.js";
 import { deriveGoalSaved } from "../src/domain/engine/goals.js";
+import { deriveBalances } from "../src/domain/engine/balances.js";
+import { reconciliationDiffs } from "../src/app/onboarding.js";
 import { isSelfTransfer } from "../src/domain/entities/transaction.js";
 
 const NOW = "2026-10-15T12:00:00.000Z";
@@ -243,4 +245,69 @@ describe("LA trip float migration", () => {
     expect(res.goals.some((g) => g.name === "LA trip float")).toBe(false);
     expect(res.transactions.some((t) => t.type === "Transfer")).toBe(false);
   });
+
+  it("pre-migration expenses don't move the derived Cash balance: current_cash $500 stays $500", () => {
+    const v1: V1Dashboard = {
+      bills: [],
+      debts: [],
+      expenses: [
+        { id: 1, amount: 45.5, category: "Food", expense_date: "2026-10-01", note: "Chipotle" },
+        { id: 2, amount: 12.0, category: "Coffee", expense_date: "2026-10-05", note: "Starbucks" },
+      ],
+      settings: {
+        current_cash: 500,
+        savings_per_paycheck: 0,
+        savings_goal: 0,
+        paycheck_amount: 0,
+        payday_one: 15,
+        payday_two: 30,
+      },
+      savings_total: 0,
+      trip_expenses: [],
+      bill_payments: [],
+    };
+    const res = migrateFromV1(v1, { migrationDate: "2026-10-15", nowIso: NOW });
+    const cash = res.accounts.find((a) => a.name === "Cash")!;
+    expect(cash.startingBalance).toBe(50000);
+    // The two earlier expenses are history: current_cash already reflects
+    // them, so the derived balance is exactly $500 — no double-count.
+    const balances = deriveBalances(res.accounts, res.transactions);
+    expect(balances[cash.id]).toBe(50000);
+    // Both expenses are still in history.
+    expect(res.transactions.filter((t) => t.type === "Expense")).toHaveLength(2);
+    // And reconciliation compares the derived balance: all zeros.
+    for (const r of reconciliationDiffs(v1, res)) {
+      expect(r.diffMinor).toBe(0);
+    }
+  });
+
+  it("migrates bill_payments against card/loan bills as Transfers to the liability", () => {
+    const v1 = v1Dashboard();
+    v1.bills = [
+      { id: 1, name: "Concord", amount: 264, due_day: 11 },
+      { id: 2, name: "Internet", amount: 62, due_day: null },
+    ];
+    v1.bill_payments = [
+      { bill_id: 1, amount: 264, paid_date: "2026-10-10" },
+      { bill_id: 2, amount: 62, paid_date: "2026-10-09" },
+    ];
+    const res = migrateFromV1(v1, { migrationDate: "2026-10-15", nowIso: NOW });
+    const cash = res.accounts.find((a) => a.name === "Cash")!;
+    const concord = res.accounts.find((a) => a.name === "Concord")!;
+
+    // Card/loan bill payment: a Transfer to the liability, not spending.
+    const cardPayment = res.transactions.find((t) => t.payee === "Concord")!;
+    expect(cardPayment.type).toBe("Transfer");
+    expect(cardPayment.accountId).toBe(cash.id);
+    expect(cardPayment.transferToAccountId).toBe(concord.id);
+    expect(cardPayment.categoryId).toBeNull();
+    expect(cardPayment.amount).toBe(26400);
+    expect(cardPayment.status).toBe("Cleared");
+
+    // Ordinary bill payment: still an Expense.
+    const internet = res.transactions.find((t) => t.payee === "Internet")!;
+    expect(internet.type).toBe("Expense");
+    expect(internet.amount).toBe(6200);
+  });
 });
+

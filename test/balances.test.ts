@@ -113,3 +113,77 @@ describe("multi-currency balances stay per-account", () => {
     expect(b).toEqual({ u: 10000, j: 4000 }); // raw per-account units; conversion happens at sum time
   });
 });
+
+describe("startingDate boundary", () => {
+  it("ignores transactions dated before the account's startingDate", () => {
+    const cash = mkAccount({ id: "c", startingBalance: 50000, startingDate: "2026-10-15" });
+    const txs = [
+      mkTransaction({ type: "Expense", amount: 2000, date: "2026-10-14", accountId: "c", status: "Cleared" }),
+      mkTransaction({ type: "Expense", amount: 1000, date: "2026-10-15", accountId: "c", status: "Cleared" }),
+    ];
+    // The 10-14 expense is history (already inside the starting balance).
+    expect(deriveBalances([cash], txs)).toEqual({ c: 49000 });
+  });
+
+  it("counts a transaction dated exactly on startingDate", () => {
+    const cash = mkAccount({ id: "c", startingBalance: 50000, startingDate: "2026-10-15" });
+    const txs = [
+      mkTransaction({ type: "Expense", amount: 1000, date: "2026-10-15", accountId: "c", status: "Cleared" }),
+    ];
+    expect(deriveBalances([cash], txs)).toEqual({ c: 49000 });
+  });
+
+  it("checks each side of a transfer against its own account's startingDate", () => {
+    const cash = mkAccount({ id: "cash", startingBalance: 100000, startingDate: "2026-10-15" });
+    const card = mkAccount({
+      id: "card",
+      type: "CreditCard",
+      startingBalance: -50000,
+      startingDate: "2026-10-01",
+    });
+    // Dated before cash started tracking: neither side moves.
+    const early = mkTransaction({
+      id: "t-early",
+      type: "Transfer",
+      amount: 10000,
+      date: "2026-10-10",
+      accountId: "cash",
+      transferToAccountId: "card",
+      status: "Cleared",
+    });
+    expect(deriveBalances([cash, card], [early])).toEqual({ cash: 100000, card: -50000 });
+
+    // Dated after both started: both sides move.
+    const onTime = mkTransaction({ ...early, id: "t-ontime", date: "2026-10-16" });
+    expect(deriveBalances([cash, card], [onTime])).toEqual({ cash: 90000, card: -40000 });
+  });
+
+  it("skips only the destination side when the destination starts later", () => {
+    const cash = mkAccount({ id: "cash", startingBalance: 100000, startingDate: "2026-10-01" });
+    const card = mkAccount({
+      id: "card",
+      type: "CreditCard",
+      startingBalance: -50000,
+      startingDate: "2026-10-15",
+    });
+    const t = mkTransaction({
+      id: "t1",
+      type: "Transfer",
+      amount: 10000,
+      date: "2026-10-10",
+      accountId: "cash",
+      transferToAccountId: "card",
+      status: "Cleared",
+    });
+    // Cash side counts (tracked since 10-01); the card wasn't tracked yet.
+    expect(deriveBalances([cash, card], [t])).toEqual({ cash: 90000, card: -50000 });
+  });
+
+  it("pre-startingDate income is history too, not new money", () => {
+    const cash = mkAccount({ id: "c", startingBalance: 50000, startingDate: "2026-10-15" });
+    const txs = [
+      mkTransaction({ type: "Income", amount: 226341, date: "2026-10-14", accountId: "c", status: "Cleared" }),
+    ];
+    expect(deriveBalances([cash], txs)).toEqual({ c: 50000 });
+  });
+});

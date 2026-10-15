@@ -16,6 +16,31 @@ import { mkAccount, mkOverride, mkRule, mkTransaction } from "./helpers.js";
 const ts = (t: string) => `2026-10-15T${t}.000Z`;
 
 describe("computeRunningBalances", () => {
+  it("produces no entry for rows dated before the account's startingDate", () => {
+    const cash = mkAccount({ id: "c", startingBalance: 50000, startingDate: "2026-10-15" });
+    const before = mkTransaction({
+      id: "tx-before",
+      type: "Expense",
+      amount: 2000,
+      date: "2026-10-14",
+      accountId: "c",
+      status: "Cleared",
+    });
+    const after = mkTransaction({
+      id: "tx-after",
+      type: "Expense",
+      amount: 1000,
+      date: "2026-10-15",
+      accountId: "c",
+      status: "Cleared",
+    });
+    const running = computeRunningBalances([cash], [before, after]);
+    // The pre-tracking row is history: no running-balance entry, so the
+    // ledger labels it "Before tracking started" instead of a balance.
+    expect(running["tx-before"]).toBeUndefined();
+    expect(running["tx-after"]).toBe(49000);
+  });
+
   it("walks txs chronologically, excludes Scheduled, skips unknown accounts, handles transfers and self-transfers", () => {
     const checking = mkAccount({ id: "acct-checking", name: "Checking", startingBalance: 100000 });
     const savings = mkAccount({ id: "acct-savings", name: "Savings", startingBalance: 50000 });

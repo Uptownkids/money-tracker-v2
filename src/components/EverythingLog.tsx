@@ -11,6 +11,7 @@ import {
   computeRunningBalances,
   removeSkippedDate,
 } from "../domain/engine/ledger.js";
+import { isBeforeTrackingStarted } from "../domain/engine/balances.js";
 import { formatMoney } from "../app/format.js";
 import type { DateOnly } from "../domain/dates/dateOnly.js";
 import type { MinorUnits } from "../domain/money/money.js";
@@ -66,6 +67,9 @@ function TxRow({
   const currency = account?.currency ?? tx.currency;
   const displayAmount = tx.fx ? tx.fx.baseAmount : tx.amount;
   const scheduled = tx.status === "Scheduled";
+  // Dated before this account started being tracked: history only, the
+  // starting balance already reflects it, so no running balance applies.
+  const beforeTracking = isBeforeTrackingStarted(account, tx.date);
 
   const sign =
     tx.type === "Income" ? "+" : tx.type === "Transfer" ? "" : "−";
@@ -100,10 +104,14 @@ function TxRow({
             ? `${accountName(tx.accountId)} → ${accountName(tx.transferToAccountId)}`
             : (category?.name ?? "No category")}
         </p>
-        {balance !== undefined && (
-          <p className="text-xs text-stone-400">
-            Balance {formatMoney(balance, currency)}
-          </p>
+        {beforeTracking ? (
+          <p className="text-xs italic text-stone-400">Before tracking started</p>
+        ) : (
+          balance !== undefined && (
+            <p className="text-xs text-stone-400">
+              Balance {formatMoney(balance, currency)}
+            </p>
+          )
         )}
       </div>
       <p className={`shrink-0 font-display text-lg ${amountCls}`}>
