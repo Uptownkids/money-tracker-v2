@@ -11,6 +11,8 @@ import type { SnoozedMove } from "../domain/entities/snoozedMove.js";
 import type { ImportBatch } from "../domain/entities/importBatch.js";
 import type { BankFingerprint } from "../domain/entities/bankFingerprint.js";
 import type { BankAccountMap } from "../domain/entities/bankAccountMap.js";
+import type { ReviewItem } from "../domain/entities/reviewItem.js";
+import type { MerchantRule } from "../domain/entities/merchantRule.js";
 
 export class MoneyTrackerDB extends Dexie {
   accounts!: Table<Account, string>;
@@ -27,6 +29,8 @@ export class MoneyTrackerDB extends Dexie {
   importBatches!: Table<ImportBatch, string>;
   bankFingerprints!: Table<BankFingerprint, string>;
   bankAccountMaps!: Table<BankAccountMap, string>;
+  reviewItems!: Table<ReviewItem, string>;
+  merchantRules!: Table<MerchantRule, string>;
 
   constructor(name = "money-tracker-v2") {
     super(name);
@@ -81,6 +85,27 @@ export class MoneyTrackerDB extends Dexie {
       importBatches: "id, createdAt",
       bankFingerprints: "&fingerprint, batchId, transactionId",
       bankAccountMaps: "id, bankKey",
+    });
+    // Version 4 adds the Needs-review inbox (reviewItems) and the learned
+    // merchant rules (merchantRules) for the Phase B matching engine.
+    this.version(4).stores({
+      accounts: "id, archived",
+      categories: "id, kind",
+      transactions:
+        "id, date, accountId, categoryId, status, recurringRuleId, [recurringRuleId+occurrenceDate], goalId, importBatchId, bankFingerprint",
+      recurringRules: "id, nextDueDate, kind, active, lastGeneratedThrough",
+      recurringOverrides: "id, ruleId, [ruleId+occurrenceDate]",
+      goals: "id, paused, targetDate",
+      splits: "id, settled, person",
+      settings: "id",
+      paydayRuns: "id, payDate, completed",
+      dailySnapshots: "id, date",
+      snoozedMoves: "moveId",
+      importBatches: "id, createdAt",
+      bankFingerprints: "&fingerprint, batchId, transactionId",
+      bankAccountMaps: "id, bankKey",
+      reviewItems: "id, status, transactionId",
+      merchantRules: "id, merchantKey",
     });
   }
 }

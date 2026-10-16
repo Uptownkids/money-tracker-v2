@@ -52,6 +52,8 @@ export interface DashboardState {
   /** Base-currency total across spendable accounts (cash on hand). */
   cashOnHand: MinorUnits;
   moves: TodaysMove[];
+  /** Open "Needs review" inbox items (bank import). Drives the badge. */
+  openReviewCount: number;
   nextPayday: DateOnly | null;
   /** True when today is a payday (for the cash card's "Payday today"). */
   isPaydayToday: boolean;
@@ -265,6 +267,7 @@ export async function loadDashboardState(): Promise<DashboardState> {
       .filter((s) => compareDateOnly(s.snoozedUntil, today) >= 0)
       .map((s) => [s.moveId, s.snoozedUntil] as const),
   );
+  const openReviewCount = await repos.reviewItems.openCount();
   const moves = rankTodaysMoves({
     today,
     isPaydayToday,
@@ -279,6 +282,7 @@ export async function loadDashboardState(): Promise<DashboardState> {
     // Moves key bill candidates as `p:<ruleId>:<occurrenceDate>`; the
     // dashboard's settled set is unprefixed, so adapt it here.
     settledOccurrenceKeys: new Set([...settledOccurrenceKeys].map((k) => `p:${k}`)),
+    openReviewCount,
   });
 
   let deficitPauseSuggestion: DashboardState["deficitPauseSuggestion"] = null;
@@ -312,6 +316,7 @@ export async function loadDashboardState(): Promise<DashboardState> {
         0,
       ),
     moves,
+    openReviewCount,
     nextPayday,
     isPaydayToday,
     cycleDaysLeft: cycle ? cycle.daysLeft : 30,

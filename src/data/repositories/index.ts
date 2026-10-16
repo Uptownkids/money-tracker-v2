@@ -12,6 +12,8 @@ import type { SnoozedMove } from "../../domain/entities/snoozedMove.js";
 import type { ImportBatch } from "../../domain/entities/importBatch.js";
 import type { BankFingerprint } from "../../domain/entities/bankFingerprint.js";
 import type { BankAccountMap } from "../../domain/entities/bankAccountMap.js";
+import type { ReviewItem } from "../../domain/entities/reviewItem.js";
+import type { MerchantRule } from "../../domain/entities/merchantRule.js";
 import type { DateOnly } from "../../domain/dates/dateOnly.js";
 import { countsTowardCommitment } from "../../domain/engine/goals.js";
 
@@ -154,6 +156,39 @@ export class SnoozedMoveRepository {
   }
 }
 
+export class ReviewItemRepository extends Repository<ReviewItem> {
+  open(): Promise<ReviewItem[]> {
+    return this.table.where("status").equals("open").toArray();
+  }
+
+  async openCount(): Promise<number> {
+    return this.table.where("status").equals("open").count();
+  }
+
+  byTransaction(transactionId: string): Promise<ReviewItem[]> {
+    return this.table.where("transactionId").equals(transactionId).toArray();
+  }
+
+  /** Resolve every open item for these transactions (bulk confirm). */
+  async resolveForTransactions(transactionIds: readonly string[], nowIso: string): Promise<void> {
+    if (transactionIds.length === 0) return;
+    const items = await this.table
+      .where("transactionId")
+      .anyOf([...transactionIds])
+      .and((r) => r.status === "open")
+      .toArray();
+    for (const item of items) {
+      await this.table.put({ ...item, status: "resolved", resolvedAt: nowIso });
+    }
+  }
+
+  /** Delete review items for transactions that no longer exist. */
+  async deleteForTransactions(transactionIds: readonly string[]): Promise<void> {
+    if (transactionIds.length === 0) return;
+    await this.table.where("transactionId").anyOf([...transactionIds]).delete();
+  }
+}
+
 export class BankFingerprintRepository {
   private table: MoneyTrackerDB["bankFingerprints"];
 
@@ -220,6 +255,8 @@ export interface Repositories {
   importBatches: Repository<ImportBatch>;
   bankFingerprints: BankFingerprintRepository;
   bankAccountMaps: Repository<BankAccountMap>;
+  reviewItems: ReviewItemRepository;
+  merchantRules: Repository<MerchantRule>;
 }
 
 /** Build all repositories bound to one database instance. */
@@ -239,5 +276,7 @@ export function createRepositories(db: MoneyTrackerDB): Repositories {
     importBatches: new Repository<ImportBatch>(db.importBatches),
     bankFingerprints: new BankFingerprintRepository(db.bankFingerprints),
     bankAccountMaps: new Repository<BankAccountMap>(db.bankAccountMaps),
+    reviewItems: new ReviewItemRepository(db.reviewItems),
+    merchantRules: new Repository<MerchantRule>(db.merchantRules),
   };
 }

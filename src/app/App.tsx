@@ -46,6 +46,7 @@ import { Insights } from "../components/Insights.js";
 import { Onboarding } from "../components/Onboarding.js";
 import { SettingsSheet, BackupBanner } from "../components/Settings.js";
 import { PaydayRun } from "../components/PaydayRun.js";
+import { ReviewInboxSheet } from "../components/ReviewInbox.js";
 import { applySwUpdate, onSwUpdate } from "./swUpdates.js";
 import { loadDemoData } from "./seed.js";
 
@@ -267,6 +268,7 @@ function SwUpdateBanner() {
 
 export function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [state, setState] = useState<DashboardState | null>(null);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -417,6 +419,9 @@ export function App() {
         case "unused-subscription":
           setBillsEditRuleId(move.relatedId);
           setTab("bills");
+          return;
+        case "needs-review":
+          setReviewOpen(true);
           return;
         case "overdue-bill":
         case "bill-due-soon": {
@@ -819,17 +824,28 @@ export function App() {
               type="button"
               onClick={() => setTab(t.id)}
               aria-current={tab === t.id ? "page" : undefined}
-              className={`flex-1 py-3.5 text-sm font-medium transition-colors ${
+              className={`relative flex-1 py-3.5 text-sm font-medium transition-colors ${
                 tab === t.id
                   ? "text-stone-900 dark:text-stone-100"
                   : "text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
               }`}
             >
               {t.label}
+              {t.id === "dashboard" && (state?.openReviewCount ?? 0) > 0 && (
+                <span
+                  className="absolute top-2 ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-stone-900 px-1 text-[10px] font-semibold text-white dark:bg-stone-100 dark:text-stone-900"
+                  aria-label={`${state?.openReviewCount} items need review`}
+                >
+                  {state?.openReviewCount}
+                </span>
+              )}
             </button>
           ))}
         </div>
       </nav>
+      {reviewOpen && (
+        <ReviewInboxSheet onClose={() => setReviewOpen(false)} onChanged={reload} />
+      )}
     </div>
   );
 }

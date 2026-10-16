@@ -28,6 +28,24 @@ export interface Settings {
    * into a JSON backup export.
    */
   appliedInboxIds?: string[];
+  // --- Bank import (Phase B) ---
+  /**
+   * Name variations the bank uses for Malike himself, e.g. "SIDIBE M"
+   * (online transfers) and "MALIKE SIDIBE" (Zelle). He can add more in
+   * Settings. Used to recognize self-transfers.
+   */
+  selfNameVariations?: string[];
+  /**
+   * Bank account labels (as named in transfer descriptions, e.g.
+   * "WAY2SAVE SAVINGS") mapped to app account ids. Mapped once, reused.
+   */
+  transferAccountNameMaps?: Record<string, string>;
+  /**
+   * Confirmed self-transfer account pairs ("fromId>toId"). A detected
+   * self-transfer for an unconfirmed pair goes to Needs review with the
+   * best guess; after one confirmation the pair is handled automatically.
+   */
+  confirmedTransferPairs?: string[];
 }
 
 // Start-of-day safe-to-spend snapshot. Written once when the day's number

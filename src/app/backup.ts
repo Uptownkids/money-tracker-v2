@@ -16,6 +16,8 @@ import type { SnoozedMove } from "../domain/entities/snoozedMove.js";
 import type { ImportBatch } from "../domain/entities/importBatch.js";
 import type { BankFingerprint } from "../domain/entities/bankFingerprint.js";
 import type { BankAccountMap } from "../domain/entities/bankAccountMap.js";
+import type { ReviewItem } from "../domain/entities/reviewItem.js";
+import type { MerchantRule } from "../domain/entities/merchantRule.js";
 import { decimalsOf } from "../domain/money/currency.js";
 
 export const BACKUP_VERSION = 1;
@@ -38,6 +40,8 @@ export interface BackupTables {
   importBatches?: ImportBatch[];
   bankFingerprints?: BankFingerprint[];
   bankAccountMaps?: BankAccountMap[];
+  reviewItems?: ReviewItem[];
+  merchantRules?: MerchantRule[];
 }
 
 export interface BackupData {
@@ -104,6 +108,8 @@ export async function exportAll(repos: Repositories): Promise<BackupData> {
     importBatches: await repos.importBatches.getAll(),
     bankFingerprints: await repos.bankFingerprints.getAll(),
     bankAccountMaps: await repos.bankAccountMaps.getAll(),
+    reviewItems: await repos.reviewItems.getAll(),
+    merchantRules: await repos.merchantRules.getAll(),
   };
   return { version: BACKUP_VERSION, exportedAt: nowIso, tables };
 }
@@ -306,6 +312,8 @@ export function validateBackup(json: unknown): BackupValidation {
     importBatches: "id",
     bankFingerprints: "fingerprint",
     bankAccountMaps: "id",
+    reviewItems: "id",
+    merchantRules: "id",
   };
   for (const [name, idField] of Object.entries(optionalTables)) {
     const rows = tableObj[name];
@@ -346,6 +354,8 @@ export async function importAll(repos: Repositories, data: BackupData): Promise<
     repos.importBatches.clear(),
     repos.bankFingerprints.clear(),
     repos.bankAccountMaps.clear(),
+    repos.reviewItems.clear(),
+    repos.merchantRules.clear(),
   ]);
   await Promise.all([
     repos.accounts.putMany(t.accounts),
@@ -362,6 +372,8 @@ export async function importAll(repos: Repositories, data: BackupData): Promise<
     repos.importBatches.putMany(t.importBatches ?? []),
     repos.bankFingerprints.putMany(t.bankFingerprints ?? []),
     repos.bankAccountMaps.putMany(t.bankAccountMaps ?? []),
+    repos.reviewItems.putMany(t.reviewItems ?? []),
+    repos.merchantRules.putMany(t.merchantRules ?? []),
   ]);
 }
 

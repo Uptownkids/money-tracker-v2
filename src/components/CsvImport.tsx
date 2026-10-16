@@ -12,13 +12,13 @@ import type { BankAccountMap } from "../domain/entities/bankAccountMap.js";
 import type { ImportBatch } from "../domain/entities/importBatch.js";
 import type { AmountSignConvention } from "../domain/import/wellsFargoCsv.js";
 import {
-  commitCsvImport,
-  previewCsvImport,
-  rollbackImportBatch,
-  suggestBankKey,
-  type CsvFileInput,
-  type ImportPreview,
-} from "../app/csvImport.js";
+  commitImport,
+  planImport,
+  type CommitSummary,
+  type ImportPlan,
+} from "../app/importEngine.js";
+import { rollbackImportBatch, suggestBankKey, type CsvFileInput } from "../app/csvImport.js";
+import { DEFAULT_SELF_NAME_VARIATIONS } from "../domain/import/selfTransfers.js";
 
 function repos() {
   return createRepositories(getActiveDb());
@@ -53,7 +53,9 @@ export function CsvImportSection() {
   const [maps, setMaps] = useState<BankAccountMap[]>([]);
   const [batches, setBatches] = useState<ImportBatch[]>([]);
   const [files, setFiles] = useState<FileState[]>([]);
-  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [plan, setPlan] = useState<ImportPlan | null>(null);
+  const [summary, setSummary] = useState<CommitSummary | null>(null);
+  const [statements, setStatements] = useState<Record<string, string>>({});
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
@@ -86,7 +88,7 @@ export function CsvImportSection() {
       if (!list || list.length === 0) return;
       setError(null);
       setDoneMsg(null);
-      setPreview(null);
+      setPlan(null);
       const read = (f: File) =>
         new Promise<string>((resolve, reject) => {
           const rd = new FileReader();
@@ -120,55 +122,68 @@ export function CsvImportSection() {
   const updateFile = (key: string, patch: Partial<FileState>) =>
     setFiles((prev) => prev.map((f) => (f.key === key ? { ...f, ...patch } : f)));
 
+  const toInputs = useCallback(
+    (): CsvFileInput[] =>
+      files.map((f) => ({
+        fileName: f.fileName,
+        text: f.text,
+        bankKey: f.bankKey.trim() || suggestBankKey(f.fileName),
+        appAccountId: f.appAccountId,
+        sign: f.sign,
+      })),
+    [files],
+  );
+
+  const parseStatement = (v: string): number | null => {
+    const n = Number(v.replace(/[$,\s]/g, ""));
+    return v.trim() !== "" && Number.isFinite(n) ? Math.round(n * 100) : null;
+  };
+
   const doPreview = useCallback(async () => {
     setError(null);
     setDoneMsg(null);
+    setSummary(null);
     if (files.some((f) => !f.appAccountId)) {
       setError("Pick an app account for every file first.");
       return;
     }
     setWorking(true);
     try {
-      const inputs: CsvFileInput[] = files.map((f) => ({
-        fileName: f.fileName,
-        text: f.text,
-        bankKey: f.bankKey.trim() || suggestBankKey(f.fileName),
-        appAccountId: f.appAccountId,
-        sign: f.sign,
-      }));
-      setPreview(await previewCsvImport(repos(), inputs));
+      setPlan(await planImport(repos(), toInputs()));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Preview failed.");
     } finally {
       setWorking(false);
     }
-  }, [files]);
+  }, [files, toInputs]);
 
   const doCommit = useCallback(async () => {
-    if (!preview) return;
+    if (!plan) return;
     setError(null);
     setWorking(true);
     try {
-      const inputs: CsvFileInput[] = files.map((f) => ({
-        fileName: f.fileName,
-        text: f.text,
-        bankKey: f.bankKey.trim() || suggestBankKey(f.fileName),
-        appAccountId: f.appAccountId,
-        sign: f.sign,
-      }));
-      const { batch } = await commitCsvImport(repos(), preview, inputs);
-      setDoneMsg(
-        `Imported ${batch.stats.imported} transactions (${batch.stats.duplicates} duplicates skipped).`,
+      const statementBalances: Record<string, number> = {};
+      for (const [accountId, v] of Object.entries(statements)) {
+        const minor = parseStatement(v);
+        if (minor !== null) statementBalances[accountId] = minor;
+      }
+      const result = await commitImport(
+        repos(),
+        plan,
+        toInputs(),
+        Object.keys(statementBalances).length > 0 ? statementBalances : undefined,
       );
+      setSummary(result);
       setFiles([]);
-      setPreview(null);
+      setPlan(null);
+      setStatements({});
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Import failed.");
     } finally {
       setWorking(false);
     }
-  }, [preview, files, load]);
+  }, [plan, toInputs, statements, load]);
 
   const doRollback = useCallback(
     async (batchId: string) => {
@@ -188,7 +203,7 @@ export function CsvImportSection() {
     [load],
   );
 
-  const sampleRows = preview?.planned.filter((p) => !p.duplicate).slice(0, 8) ?? [];
+  const sampleRows = plan?.preview.planned.filter((p) => !p.duplicate).slice(0, 8) ?? [];
 
   return (
     <div>
@@ -290,13 +305,15 @@ export function CsvImportSection() {
         <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-300">{doneMsg}</p>
       )}
 
-      {preview && (
+      {plan && (
         <div className="mt-4 rounded-2xl border border-stone-200 p-3 dark:border-stone-700">
           <p className="text-sm font-medium text-stone-900 dark:text-stone-100">Preview</p>
           <p className="mt-1 text-sm text-stone-600 dark:text-stone-300">
-            {preview.newCount} new · {preview.duplicateCount} duplicates skipped
+            {plan.summary.newRows} new · {plan.summary.matched} matched to your entries ·{" "}
+            {plan.summary.billSettled} bills settled · {plan.summary.transfersNew} transfers ·{" "}
+            {plan.summary.duplicates} duplicates skipped · {plan.summary.needsReview} need review
           </p>
-          {preview.files.map((f) => (
+          {plan.preview.files.map((f) => (
             <div key={f.fileName} className="mt-2 text-xs text-stone-500 dark:text-stone-400">
               <span className="font-medium text-stone-700 dark:text-stone-200">{f.fileName}</span>
               {" — "}
@@ -333,18 +350,63 @@ export function CsvImportSection() {
               ))}
             </ul>
           )}
+          <div className="mt-3">
+            <p className={labelCls}>Statement ending balances (optional — checks the app's math)</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {accounts.map((a) => (
+                <div key={a.id} className="flex items-center gap-2">
+                  <span className="w-32 shrink-0 truncate text-xs text-stone-500 dark:text-stone-400">
+                    {a.name}
+                  </span>
+                  <input
+                    className={inputCls}
+                    placeholder="$0.00"
+                    value={statements[a.id] ?? ""}
+                    onChange={(e) => setStatements((s) => ({ ...s, [a.id]: e.target.value }))}
+                    inputMode="decimal"
+                    aria-label={`Statement balance for ${a.name}`}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
           <button
             type="button"
             onClick={() => void doCommit()}
-            disabled={working || preview.newCount === 0}
+            disabled={working || plan.summary.newRows === 0}
             className={`${primaryBtnCls} mt-3`}
           >
-            {working ? "Working…" : `Import ${preview.newCount} transactions`}
+            {working ? "Working…" : `Import ${plan.summary.newRows} transactions`}
           </button>
-          {preview.newCount === 0 && (
+          {plan.summary.newRows === 0 && (
             <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
               Nothing new — every row was already imported.
             </p>
+          )}
+        </div>
+      )}
+
+      {summary && summary.batch && (
+        <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950">
+          <p className="text-sm font-medium text-emerald-900 dark:text-emerald-100">Import complete</p>
+          <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">
+            {summary.imported + summary.transfersNew} imported · {summary.matched} matched ·{" "}
+            {summary.billSettled} bills settled · {summary.needsReview} need review
+          </p>
+          {summary.reconciliation.some((r) => r.diff !== undefined) && (
+            <ul className="mt-2 space-y-1 text-sm">
+              {summary.reconciliation
+                .filter((r) => r.diff !== undefined)
+                .map((r) => (
+                  <li key={r.accountId} className="text-emerald-800 dark:text-emerald-200">
+                    {r.accountName}: app {money(r.appBalance)} vs statement{" "}
+                    {money(r.statementBalance as number)}
+                    {r.diff !== 0 && (
+                      <span className="font-medium"> — off by {money(r.diff as number)}</span>
+                    )}
+                  </li>
+                ))}
+            </ul>
           )}
         </div>
       )}
@@ -401,6 +463,165 @@ export function CsvImportSection() {
           </ul>
         </div>
       )}
+
+      <SelfTransferSettings accounts={accounts} />
+    </div>
+  );
+}
+
+/** Name variations + bank account-label maps for self-transfer detection. */
+function SelfTransferSettings({ accounts }: { accounts: Account[] }) {
+  const [variations, setVariations] = useState<string[]>([]);
+  const [labelMaps, setLabelMaps] = useState<Record<string, string>>({});
+  const [newName, setNewName] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [newLabelAccount, setNewLabelAccount] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const s = await repos().settings.get();
+    setVariations(s?.selfNameVariations ?? DEFAULT_SELF_NAME_VARIATIONS);
+    setLabelMaps(s?.transferAccountNameMaps ?? {});
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const save = useCallback(
+    async (patch: { selfNameVariations?: string[]; transferAccountNameMaps?: Record<string, string> }) => {
+      const r = repos();
+      const s = await r.settings.get();
+      if (!s) {
+        setMsg("Settings not found — open the app once first.");
+        return;
+      }
+      await r.settings.save({ ...s, ...patch });
+      await load();
+      setMsg("Saved.");
+      window.setTimeout(() => setMsg(null), 2000);
+    },
+    [load],
+  );
+
+  const plainLabelMaps = Object.entries(labelMaps).filter(([k]) => !k.startsWith("zelle:"));
+
+  return (
+    <div className="mt-4">
+      <p className="text-sm font-medium text-stone-900 dark:text-stone-100">Self-transfer recognition</p>
+      <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
+        How the bank writes your name, and which account a bank label like "WAY2SAVE SAVINGS" means.
+      </p>
+
+      <p className={labelCls}>Name variations</p>
+      <div className="mt-1 flex flex-wrap gap-1.5">
+        {variations.map((v) => (
+          <span
+            key={v}
+            className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2.5 py-1 text-xs text-stone-700 dark:bg-stone-800 dark:text-stone-300"
+          >
+            {v}
+            <button
+              type="button"
+              aria-label={`Remove ${v}`}
+              className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200"
+              onClick={() => void save({ selfNameVariations: variations.filter((x) => x !== v) })}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="mt-2 flex gap-2">
+        <input
+          className={inputCls}
+          placeholder="Add a variation, e.g. SIDIBE MALIKE"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+        />
+        <button
+          type="button"
+          className={secondaryBtnCls}
+          onClick={() => {
+            const v = newName.trim().toUpperCase();
+            if (!v || variations.includes(v)) return;
+            setNewName("");
+            void save({ selfNameVariations: [...variations, v] });
+          }}
+        >
+          Add
+        </button>
+      </div>
+
+      <p className={labelCls}>Account labels</p>
+      <ul className="mt-1 space-y-1.5">
+        {plainLabelMaps.map(([label, accountId]) => (
+          <li key={label} className="flex items-center gap-2">
+            <span className="w-40 shrink-0 truncate text-xs text-stone-600 dark:text-stone-300">{label}</span>
+            <select
+              className={inputCls}
+              value={accountId}
+              onChange={(e) =>
+                void save({ transferAccountNameMaps: { ...labelMaps, [label]: e.target.value } })
+              }
+              aria-label={`Account for ${label}`}
+            >
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              aria-label={`Remove ${label}`}
+              className={secondaryBtnCls}
+              onClick={() => {
+                const next = { ...labelMaps };
+                delete next[label];
+                void save({ transferAccountNameMaps: next });
+              }}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-2 flex gap-2">
+        <input
+          className={inputCls}
+          placeholder="Label as the bank writes it"
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+        />
+        <select
+          className={inputCls}
+          value={newLabelAccount}
+          onChange={(e) => setNewLabelAccount(e.target.value)}
+          aria-label="App account"
+        >
+          <option value="">App account…</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className={secondaryBtnCls}
+          disabled={!newLabel.trim() || !newLabelAccount}
+          onClick={() => {
+            const label = newLabel.trim().toUpperCase();
+            setNewLabel("");
+            setNewLabelAccount("");
+            void save({ transferAccountNameMaps: { ...labelMaps, [label]: newLabelAccount } });
+          }}
+        >
+          Add
+        </button>
+      </div>
+      {msg && <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{msg}</p>}
     </div>
   );
 }
