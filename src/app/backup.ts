@@ -111,6 +111,62 @@ export function downloadJson(filename: string, data: unknown): void {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Hand a JSON backup file to the user. On devices with the Web Share API
+ * (iOS installed apps), the system share sheet is used: a programmatic
+ * anchor download silently vanishes in the iOS standalone PWA, leaving
+ * the user with no file. Falls back to the anchor download elsewhere.
+ * Returns how the file was handed off. Rejects with AbortError if the
+ * user dismisses the share sheet — callers should treat that as a
+ * cancel, not a failure.
+ */
+export async function exportJsonFile(
+  filename: string,
+  data: unknown,
+): Promise<"shared" | "downloaded"> {
+  const file = new File([JSON.stringify(data, null, 2)], filename, {
+    type: "application/json",
+  });
+  const nav =
+    typeof navigator !== "undefined"
+      ? (navigator as Navigator & {
+          canShare?: (data: { files: File[] }) => boolean;
+          share?: (data: { files: File[]; title?: string }) => Promise<void>;
+        })
+      : undefined;
+  if (nav?.canShare?.({ files: [file] }) && nav.share) {
+    await nav.share({ files: [file], title: "Money Tracker backup" });
+    return "shared";
+  }
+  downloadJson(filename, data);
+  return "downloaded";
+}
+
+/**
+ * Same share-first handoff for text exports (CSV). Falls back to the
+ * anchor download where Web Share is unavailable.
+ */
+export async function exportTextFile(
+  filename: string,
+  text: string,
+  mime: string,
+): Promise<"shared" | "downloaded"> {
+  const file = new File([text], filename, { type: mime });
+  const nav =
+    typeof navigator !== "undefined"
+      ? (navigator as Navigator & {
+          canShare?: (data: { files: File[] }) => boolean;
+          share?: (data: { files: File[]; title?: string }) => Promise<void>;
+        })
+      : undefined;
+  if (nav?.canShare?.({ files: [file] }) && nav.share) {
+    await nav.share({ files: [file], title: filename });
+    return "shared";
+  }
+  downloadText(filename, text, mime);
+  return "downloaded";
+}
+
 /** Trigger a browser download of a text file. */
 export function downloadText(filename: string, text: string, mime: string): void {
   const blob = new Blob([text], { type: mime });

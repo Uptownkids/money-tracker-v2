@@ -25,6 +25,7 @@ import type {
   TransactionType,
 } from "../domain/entities/transaction.js";
 import type { RecurringRule } from "../domain/entities/recurringRule.js";
+import type { Goal } from "../domain/entities/goal.js";
 
 type QuickType = "Expense" | "Income" | "Transfer";
 const QUICK_TYPES: QuickType[] = ["Expense", "Income", "Transfer"];
@@ -109,6 +110,8 @@ export function TransactionEditSheet({
   const [date, setDate] = useState<DateOnly>(tx.date);
   const [phase, setPhase] = useState<"form" | "scope">("form");
   const [rule, setRule] = useState<RecurringRule | null>(null);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [goalId, setGoalId] = useState(tx.goalId ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmSkip, setConfirmSkip] = useState(false);
@@ -116,10 +119,16 @@ export function TransactionEditSheet({
   useEffect(() => {
     let alive = true;
     (async () => {
-      if (tx.recurringRuleId && tx.occurrenceDate) {
-        const repos = createRepositories(getActiveDb());
-        const r = await repos.recurringRules.getById(tx.recurringRuleId);
-        if (alive) setRule(r ?? null);
+      const repos = createRepositories(getActiveDb());
+      const [r, gs] = await Promise.all([
+        tx.recurringRuleId && tx.occurrenceDate
+          ? repos.recurringRules.getById(tx.recurringRuleId)
+          : Promise.resolve(null),
+        repos.goals.getAll(),
+      ]);
+      if (alive) {
+        setRule(r ?? null);
+        setGoals(gs);
       }
     })();
     return () => {
@@ -156,6 +165,10 @@ export function TransactionEditSheet({
   const payeeChanged = payee.trim() !== tx.payee;
   const notesChanged = notes.trim() !== tx.notes;
   const typeChanged = typeTouched && type !== tx.type;
+  const goalChanged =
+    effectiveType === "Transfer" && !isDebtPaymentRow
+      ? (goalId || undefined) !== (tx.goalId ?? undefined)
+      : false;
   const ruleRelevantChanged = amountChanged || dateChanged || accountChanged || categoryChanged;
   // A generated Scheduled row can be skipped (never regenerated) instead
   // of deleted outright. Generated Cleared/Pending rows are history and
@@ -257,6 +270,13 @@ export function TransactionEditSheet({
       } else {
         delete updated.transferToAccountId;
       }
+      // Linking a transfer to a goal is what makes it count toward the
+      // goal's progress and this cycle's contribution. Debt-payment rows
+      // are system-managed bill payments, so the picker is hidden for
+      // them and any existing link is left untouched.
+      if (effectiveType === "Transfer" && !isDebtPaymentRow) {
+        updated.goalId = goalId || undefined;
+      }
       if (amountChanged || accountChanged) delete updated.fx;
       await repos.transactions.put(updated);
       await onSaved();
@@ -285,7 +305,8 @@ export function TransactionEditSheet({
 
   const nothingChanged =
     !amountChanged && !dateChanged && !accountChanged && !categoryChanged &&
-    !toAccountChanged && !payeeChanged && !notesChanged && !typeChanged;
+    !toAccountChanged && !payeeChanged && !notesChanged && !typeChanged &&
+    !goalChanged;
 
   return (
     <SheetShell title="Edit transaction" onClose={onClose}>
@@ -365,6 +386,32 @@ export function TransactionEditSheet({
                 </option>
               ))}
             </select>
+          </div>
+        )}
+
+        {effectiveType === "Transfer" && !isDebtPaymentRow && (
+          <div>
+            <label htmlFor="et-goal" className={labelCls}>
+              Goal (optional)
+            </label>
+            <select
+              id="et-goal"
+              value={goalId}
+              onChange={(e) => setGoalId(e.target.value)}
+              className={fieldCls}
+            >
+              <option value="">No goal</option>
+              {goals
+                .filter((g) => !g.completed && g.currency === accountCurrency)
+                .map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+            </select>
+            <p className="pt-1.5 text-xs text-stone-500 dark:text-stone-400">
+              Link this transfer to count it toward the goal's progress.
+            </p>
           </div>
         )}
 

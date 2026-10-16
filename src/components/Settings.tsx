@@ -13,8 +13,8 @@ import type { Category, CategoryKind } from "../domain/entities/category.js";
 import type { Settings as SettingsEntity } from "../domain/entities/settings.js";
 import { applyTheme, type ThemeSetting } from "../app/theme.js";
 import {
-  downloadJson,
-  downloadText,
+  exportJsonFile,
+  exportTextFile,
   exportAll,
   importAll,
   markBackedUp,
@@ -335,11 +335,14 @@ export function SettingsSheet({
     setExporting(true);
     try {
       const data = await exportAll(repos());
-      downloadJson(`money-tracker-backup-${todayLocal()}.json`, data);
+      await exportJsonFile(`money-tracker-backup-${todayLocal()}.json`, data);
       const s = await repos().settings.get();
       if (s) setSettings({ ...defaultSettings(), ...s });
-    } catch {
-      setError("The export failed. Try again.");
+    } catch (e) {
+      // Dismissing the share sheet is a cancel, not a failure.
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        setError("The export failed. Try again.");
+      }
     } finally {
       setExporting(false);
     }
@@ -360,12 +363,14 @@ export function SettingsSheet({
         new Map(accounts.map((a) => [a.id, a])),
         new Map(cats.map((c) => [c.id, c])),
       );
-      downloadText(`money-tracker-transactions-${todayLocal()}.csv`, csv, "text/csv");
+      await exportTextFile(`money-tracker-transactions-${todayLocal()}.csv`, csv, "text/csv");
       await markBackedUp(r, new Date().toISOString());
       const s = await r.settings.get();
       if (s) setSettings({ ...defaultSettings(), ...s });
-    } catch {
-      setError("The export failed. Try again.");
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        setError("The export failed. Try again.");
+      }
     } finally {
       setExporting(false);
     }

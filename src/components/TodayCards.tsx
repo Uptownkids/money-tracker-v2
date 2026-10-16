@@ -265,8 +265,7 @@ export function TodayCards({
           onClick={() => onPauseGoal(state.deficitPauseSuggestion!.goalId)}
           className="mt-3 w-full rounded-2xl bg-stone-900 dark:bg-stone-100 px-4 py-3 text-sm font-medium text-white dark:text-stone-900 transition-colors hover:bg-stone-700 dark:hover:bg-stone-200"
         >
-          Pause {state.deficitPauseSuggestion.goalName} (
-          {formatMoney(state.deficitPauseSuggestion.amount, currency)} this cycle)
+          Pause {state.deficitPauseSuggestion.goalName} goal
         </button>
       )}
 

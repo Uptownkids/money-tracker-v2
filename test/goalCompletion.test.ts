@@ -194,3 +194,27 @@ describe("goal-past-due move", () => {
     expect(rankTodaysMoves(movesCtx(goals))).toHaveLength(0);
   });
 });
+
+describe("linking a transfer to a goal", () => {
+  it("an untagged savings transfer moves no goal math; tagging it counts everything", () => {
+    // Malike's Oct 16 case: $1,000 moved checking -> Amex Savings with no
+    // goal link, so the Savings progress bar stayed at $0 and the $150
+    // cycle contribution still showed as owed. The edit sheet's Goal
+    // picker is the retroactive link: it sets goalId on the existing
+    // transfer — no money moves.
+    const move = mkTransaction({
+      type: "Transfer",
+      amount: 100000 as MinorUnits,
+      date: "2026-10-16" as DateOnly,
+      accountId: "wf",
+      transferToAccountId: "amex",
+      status: "Cleared",
+    });
+    // Untagged: invisible to the goal.
+    expect(deriveGoalSaved("g-save", [move])).toBe(0);
+
+    // Linked (what the picker writes): progress jumps to $1,000.
+    const linked = { ...move, goalId: "g-save" };
+    expect(deriveGoalSaved("g-save", [linked])).toBe(100000);
+  });
+});
