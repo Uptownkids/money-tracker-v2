@@ -70,6 +70,32 @@ function resolveYear(month: number, statementYear: number, statementMonth: numbe
 }
 
 /**
+ * Column-header words ("Deposits/", "Additions", …). pdf.js groups text
+ * into lines by baseline, so a header word can land on the same visual
+ * line as a transaction's continuation text. These words never appear in
+ * a real description, so description items matching them are dropped.
+ */
+const HEADER_WORDS = new Set([
+  "date", "check", "number", "description",
+  "deposits/", "additions", "withdrawals/", "subtractions",
+  "ending", "daily", "balance",
+]);
+
+function isHeaderWord(text: string): boolean {
+  return HEADER_WORDS.has(text.trim().toLowerCase());
+}
+
+function descriptionItems(line: PdfTextItem[]): PdfTextItem[] {
+  return line.filter(
+    (i) =>
+      i.x >= DESC_X_MIN &&
+      i.x1 <= DEPOSIT_X1_MAX &&
+      parseAmountToMinor(i.text) === null &&
+      !isHeaderWord(i.text),
+  );
+}
+
+/**
  * Lines that are part of the table chrome, not transactions: the
  * "Transaction history" title (repeated on every page), the column
  * header row, and page footers ("August 25, 2026 Page 12 of 16").
@@ -214,9 +240,7 @@ export function parseWellsFargoPdf(
         // x1 beyond that: ending daily balance — ignored.
       }
 
-      const descriptionParts = line
-        .filter((i) => i.x >= DESC_X_MIN && i.x1 <= DEPOSIT_X1_MAX && parseAmountToMinor(i.text) === null)
-        .map((i) => i.text);
+      const descriptionParts = descriptionItems(line).map((i) => i.text);
 
       pending = {
         date,
@@ -228,9 +252,7 @@ export function parseWellsFargoPdf(
       };
     } else if (pending) {
       // Continuation line: description text only (no date, no amount).
-      const extra = line
-        .filter((i) => i.x >= DESC_X_MIN && i.x1 <= DEPOSIT_X1_MAX && parseAmountToMinor(i.text) === null)
-        .map((i) => i.text);
+      const extra = descriptionItems(line).map((i) => i.text);
       // Guard: a stray amount-like token on a continuation line that sits
       // in an amount column belongs to the pending transaction.
       if (extra.length === 0) {

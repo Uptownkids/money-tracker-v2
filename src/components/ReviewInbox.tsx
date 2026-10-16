@@ -8,7 +8,7 @@ import { getActiveDb } from "../data/db.js";
 import { createRepositories } from "../data/repositories/index.js";
 import type { Account } from "../domain/entities/account.js";
 import type { Category } from "../domain/entities/category.js";
-import type { RecurringRule } from "../domain/entities/recurringRule.js";
+import type { Frequency, RecurringRule } from "../domain/entities/recurringRule.js";
 import type { ReviewItem, ReviewReason } from "../domain/entities/reviewItem.js";
 import type { Transaction } from "../domain/entities/transaction.js";
 import {
@@ -16,6 +16,7 @@ import {
   confirmRecurringSuggestion,
   confirmReviewItem,
   confirmTransferPair,
+  createBillFromReviewItem,
   ignoreReviewItem,
   linkBillReviewItem,
   markTransferReviewItem,
@@ -36,6 +37,7 @@ const primaryPillCls =
   "shrink-0 rounded-full bg-stone-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-200 disabled:opacity-50";
 const inputCls =
   "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100";
+const labelCls = "mb-1 block text-xs font-medium text-stone-500 dark:text-stone-400";
 
 const REASON_LABEL: Record<ReviewReason, string> = {
   uncategorized: "Needs a category",
@@ -75,6 +77,15 @@ export function ReviewInboxSheet({
   const [error, setError] = useState<string | null>(null);
   const [expand, setExpand] = useState<{ id: string; mode: "category" | "transfer" | "bill" } | null>(null);
   const [pick, setPick] = useState("");
+  // "New bill" form state, keyed to the item being edited.
+  const [newBill, setNewBill] = useState<{
+    itemId: string;
+    name: string;
+    amountText: string;
+    kind: "Bill" | "Subscription";
+    frequency: Frequency;
+    categoryId: string;
+  } | null>(null);
   const [always, setAlways] = useState<Record<string, boolean>>({});
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
 
@@ -266,6 +277,7 @@ export function ReviewInboxSheet({
                     className={pillCls}
                     onClick={() => {
                       setPick("");
+                      setNewBill(null);
                       setExpand({ id: d.item.id, mode: "bill" });
                     }}
                   >
@@ -327,31 +339,153 @@ export function ReviewInboxSheet({
                       </select>
                     )}
                     {expand.mode === "bill" && (
-                      <select
-                        className={inputCls}
-                        value={pick}
-                        onChange={(e) => setPick(e.target.value)}
-                        aria-label="Pick the bill"
-                      >
-                        <option value="">This is my… bill</option>
-                        {rules.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name}
-                          </option>
-                        ))}
-                      </select>
+                      <>
+                        <select
+                          className={inputCls}
+                          value={pick}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setPick(v);
+                            if (v === "__new__") {
+                              setNewBill({
+                                itemId: d.item.id,
+                                name: d.tx.payee,
+                                amountText: (Math.abs(d.tx.amount) / 100).toFixed(2),
+                                kind: "Bill",
+                                frequency: "monthly",
+                                categoryId: "",
+                              });
+                            } else {
+                              setNewBill(null);
+                            }
+                          }}
+                          aria-label="Pick the bill"
+                        >
+                          <option value="">This is my… bill</option>
+                          {rules.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                            </option>
+                          ))}
+                          <option value="__new__">+ New bill…</option>
+                        </select>
+                        {pick === "__new__" && newBill?.itemId === d.item.id && (
+                          <div className="mt-2 grid grid-cols-2 gap-2 rounded-2xl border border-stone-200 p-3 dark:border-stone-700">
+                            <div className="col-span-2">
+                              <label className={labelCls} htmlFor={`nb-name-${d.item.id}`}>
+                                Bill name
+                              </label>
+                              <input
+                                id={`nb-name-${d.item.id}`}
+                                className={inputCls}
+                                value={newBill.name}
+                                onChange={(e) => setNewBill({ ...newBill, name: e.target.value })}
+                              />
+                            </div>
+                            <div>
+                              <label className={labelCls} htmlFor={`nb-amt-${d.item.id}`}>
+                                Amount
+                              </label>
+                              <input
+                                id={`nb-amt-${d.item.id}`}
+                                className={inputCls}
+                                inputMode="decimal"
+                                value={newBill.amountText}
+                                onChange={(e) => setNewBill({ ...newBill, amountText: e.target.value })}
+                              />
+                            </div>
+                            <div>
+                              <label className={labelCls} htmlFor={`nb-kind-${d.item.id}`}>
+                                Type
+                              </label>
+                              <select
+                                id={`nb-kind-${d.item.id}`}
+                                className={inputCls}
+                                value={newBill.kind}
+                                onChange={(e) =>
+                                  setNewBill({ ...newBill, kind: e.target.value as "Bill" | "Subscription" })
+                                }
+                              >
+                                <option value="Bill">Bill</option>
+                                <option value="Subscription">Subscription</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className={labelCls} htmlFor={`nb-freq-${d.item.id}`}>
+                                Repeats
+                              </label>
+                              <select
+                                id={`nb-freq-${d.item.id}`}
+                                className={inputCls}
+                                value={newBill.frequency}
+                                onChange={(e) => setNewBill({ ...newBill, frequency: e.target.value as Frequency })}
+                              >
+                                <option value="weekly">Weekly</option>
+                                <option value="biweekly">Every 2 weeks</option>
+                                <option value="monthly">Monthly</option>
+                                <option value="annual">Yearly</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className={labelCls} htmlFor={`nb-cat-${d.item.id}`}>
+                                Category
+                              </label>
+                              <select
+                                id={`nb-cat-${d.item.id}`}
+                                className={inputCls}
+                                value={newBill.categoryId}
+                                onChange={(e) => setNewBill({ ...newBill, categoryId: e.target.value })}
+                              >
+                                <option value="">Pick…</option>
+                                {categories
+                                  .filter((c) => c.kind === "expense")
+                                  .map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                      {c.name}
+                                    </option>
+                                  ))}
+                              </select>
+                            </div>
+                            <p className="col-span-2 text-xs text-stone-500 dark:text-stone-400">
+                              Books on {accounts.find((a) => a.id === d.tx.accountId)?.name ?? "this account"} ·
+                              next due one {newBill.frequency === "monthly" ? "month" : newBill.frequency === "annual" ? "year" : newBill.frequency === "weekly" ? "week" : "2 weeks"} after{" "}
+                              {d.tx.date}
+                            </p>
+                          </div>
+                        )}
+                      </>
                     )}
                     <button
                       type="button"
-                      disabled={busy || !pick}
+                      disabled={
+                        busy ||
+                        !pick ||
+                        (pick === "__new__" &&
+                          (!newBill ||
+                            newBill.itemId !== d.item.id ||
+                            !newBill.name.trim() ||
+                            !newBill.categoryId ||
+                            !Number.isFinite(Number(newBill.amountText)) ||
+                            Number(newBill.amountText) <= 0))
+                      }
                       className={primaryPillCls}
                       onClick={() => {
                         const mode = expand.mode;
                         const value = pick;
+                        const bill = newBill;
                         void run(d.item.id, () => {
                           if (mode === "category")
                             return recategorizeReviewItem(repos(), d.item.id, value, undefined, !!always[d.item.id]);
                           if (mode === "transfer") return markTransferReviewItem(repos(), d.item.id, value);
+                          if (value === "__new__" && bill && bill.itemId === d.item.id) {
+                            return createBillFromReviewItem(repos(), d.item.id, {
+                              name: bill.name,
+                              amountMinor: Math.round(Number(bill.amountText) * 100),
+                              kind: bill.kind,
+                              frequency: bill.frequency,
+                              categoryId: bill.categoryId,
+                            }).then(() => undefined);
+                          }
                           return linkBillReviewItem(repos(), d.item.id, value);
                         });
                       }}

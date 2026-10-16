@@ -6,6 +6,9 @@
 import type { Repositories } from "../data/repositories/index.js";
 import type { Transaction } from "../domain/entities/transaction.js";
 import type { MerchantRule } from "../domain/entities/merchantRule.js";
+import type { Frequency, RecurringRule } from "../domain/entities/recurringRule.js";
+import type { MinorUnits } from "../domain/money/money.js";
+import { addDays, addMonthsClamped } from "../domain/dates/dateOnly.js";
 import { EXTERNAL_ACCOUNT_ID } from "../domain/import/selfTransfers.js";
 import {
   applyRecurringPriceChange,
@@ -199,6 +202,73 @@ export async function linkBillReviewItem(
     updatedAt: now,
   });
   await resolveItem(repos, itemId);
+}
+
+export interface NewBillInput {
+  name: string;
+  /** Positive minor units. */
+  amountMinor: number;
+  kind: "Bill" | "Subscription";
+  frequency: Frequency;
+  categoryId: string;
+}
+
+/**
+ * Create a bill/subscription rule from a review item and link the
+ * transaction to it. The rule books on the transaction's own account —
+ * this is the fix for bills that aren't credit-card payments (e.g. an
+ * Apple subscription paid straight from checking).
+ */
+export async function createBillFromReviewItem(
+  repos: Repositories,
+  itemId: string,
+  input: NewBillInput,
+): Promise<string> {
+  const { tx } = await getItem(repos, itemId);
+  const name = input.name.trim();
+  if (!name) throw new Error("createBillFromReviewItem: name is required");
+  if (!Number.isFinite(input.amountMinor) || input.amountMinor <= 0) {
+    throw new Error("createBillFromReviewItem: amount must be positive");
+  }
+  const category = await repos.categories.getById(input.categoryId);
+  if (!category) throw new Error(`createBillFromReviewItem: unknown category "${input.categoryId}"`);
+
+  const now = repos_now();
+  const nextDueDate =
+    input.frequency === "weekly"
+      ? addDays(tx.date, 7)
+      : input.frequency === "biweekly"
+        ? addDays(tx.date, 14)
+        : input.frequency === "annual"
+          ? addMonthsClamped(tx.date, 12)
+          : addMonthsClamped(tx.date, 1);
+  const rule: RecurringRule = {
+    id: crypto.randomUUID(),
+    kind: input.kind,
+    name,
+    amount: Math.round(input.amountMinor) as MinorUnits,
+    currency: "USD",
+    accountId: tx.accountId,
+    categoryId: input.categoryId,
+    frequency: input.frequency,
+    nextDueDate,
+    weekendShift: "none",
+    autoPay: false,
+    reminderOffsetDays: 3,
+    skippedDates: [],
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await repos.recurringRules.put(rule);
+  await repos.transactions.put({
+    ...tx,
+    recurringRuleId: rule.id,
+    categoryId: input.categoryId,
+    updatedAt: now,
+  });
+  await resolveItem(repos, itemId);
+  return rule.id;
 }
 
 /** Hide the item from review. The transaction still counts in balances. */

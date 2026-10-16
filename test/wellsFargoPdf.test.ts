@@ -209,4 +209,24 @@ describe("detectStatementDate", () => {
   it("returns null when absent", () => {
     expect(detectStatementDate([page(line(item(36, 90, "Hello")) )])).toBeNull();
   });
+
+  it("drops header words merged into a line by pdf.js grouping", () => {
+    const pages = [
+      page(
+        header(),
+        colHeader(),
+        txLine("8/10", "Purchase authorized on 08/09 Deli", "8.09", X1_WITHDRAWAL),
+        // pdf.js put the "Deposits/" header word on the continuation line.
+        line(
+          item(X_DESC, X_DESC + 100, "S123456789012345 Card 0301"),
+          item(404, 434, "Deposits/"),
+        ),
+      ),
+    ];
+    const { rows } = parseWellsFargoPdf(pages, OPTS);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.description).toBe(
+      "Purchase authorized on 08/09 Deli S123456789012345 Card 0301",
+    );
+  });
 });

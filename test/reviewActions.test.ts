@@ -8,6 +8,7 @@ import { createRepositories, type Repositories } from "../src/data/repositories/
 import {
   confirmReviewItem,
   confirmTransferPair,
+  createBillFromReviewItem,
   ignoreReviewItem,
   linkBillReviewItem,
   markTransferReviewItem,
@@ -127,6 +128,43 @@ describe("reviewActions", () => {
     const ri = await setupItem();
     await linkBillReviewItem(repos, ri.id, "rule-spotify");
     expect((await repos.transactions.getById("tx-1"))?.recurringRuleId).toBe("rule-spotify");
+  });
+
+  it("new-bill creates the rule on the transaction's account and links the row", async () => {
+    await setup();
+    const ri = await setupItem();
+    const ruleId = await createBillFromReviewItem(repos, ri.id, {
+      name: "Apple",
+      amountMinor: 1099,
+      kind: "Subscription",
+      frequency: "monthly",
+      categoryId: "cat-other",
+    });
+    const rule = await repos.recurringRules.getById(ruleId);
+    expect(rule).toMatchObject({
+      kind: "Subscription",
+      name: "Apple",
+      amount: 1099,
+      accountId: "acct-checking",
+      categoryId: "cat-other",
+      frequency: "monthly",
+      nextDueDate: "2026-11-16",
+      active: true,
+    });
+    expect((await repos.transactions.getById("tx-1"))).toMatchObject({
+      recurringRuleId: ruleId,
+      categoryId: "cat-other",
+    });
+    expect((await repos.reviewItems.getById(ri.id))?.status).toBe("resolved");
+  });
+
+  it("new-bill rejects a blank name, bad amount, or unknown category", async () => {
+    await setup();
+    const ri = await setupItem();
+    const base = { name: "Apple", amountMinor: 1099, kind: "Subscription" as const, frequency: "monthly" as const, categoryId: "cat-other" };
+    await expect(createBillFromReviewItem(repos, ri.id, { ...base, name: "  " })).rejects.toThrow(/name/);
+    await expect(createBillFromReviewItem(repos, ri.id, { ...base, amountMinor: 0 })).rejects.toThrow(/amount/);
+    await expect(createBillFromReviewItem(repos, ri.id, { ...base, categoryId: "nope" })).rejects.toThrow(/category/);
   });
 
   it("ignore hides the item but leaves the transaction counted", async () => {
