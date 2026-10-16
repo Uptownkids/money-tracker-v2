@@ -11,6 +11,7 @@
 import type { DateOnly } from "../dates/dateOnly.js";
 import { yearOf, monthOf } from "../dates/dateOnly.js";
 import type { Category } from "../entities/category.js";
+import { transferCategoryIds } from "../entities/category.js";
 import type { RecurringRule, Frequency } from "../entities/recurringRule.js";
 import type { Transaction } from "../entities/transaction.js";
 import type { MinorUnits } from "../money/money.js";
@@ -90,8 +91,15 @@ function spendingDelta(t: Transaction): MinorUnits {
   return 0;
 }
 
-function isSpending(t: Transaction, opts: HistoryOptions): boolean {
+function isSpending(
+  t: Transaction,
+  opts: HistoryOptions,
+  transferCats: ReadonlySet<string> = new Set<string>(),
+): boolean {
   if (t.type !== "Expense" && t.type !== "Refund") return false;
+  // Transfers are never spending — including Expenses filed under a
+  // Transfer category.
+  if (t.type === "Expense" && t.categoryId != null && transferCats.has(t.categoryId)) return false;
   if (t.status === "Scheduled") return false; // projections aren't spending
   if (!opts.includeBusiness && t.tags.includes("business")) return false;
   return true;
@@ -108,7 +116,8 @@ export function buildSpendingHistory(
   opts: HistoryOptions,
   today: DateOnly,
 ): SpendingHistory {
-  const spending = transactions.filter((t) => isSpending(t, opts));
+  const transferCats = transferCategoryIds(categories);
+  const spending = transactions.filter((t) => isSpending(t, opts, transferCats));
   const catName = new Map(categories.map((c) => [c.id, c.name]));
   const ruleById = new Map(rules.map((r) => [r.id, r]));
   const isBill = (t: Transaction): boolean => {
