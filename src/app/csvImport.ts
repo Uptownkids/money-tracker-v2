@@ -33,6 +33,12 @@ export interface CsvFileInput {
   appAccountId: string;
   sign?: AmountSignConvention;
   columnMap?: WellsFargoColumnMap;
+  /** "pdf" files are parsed up front (pdf.js) and carry rows directly. */
+  kind?: "csv" | "pdf";
+  parsedRows?: ParsedBankRow[];
+  parseErrors?: string[];
+  /** e.g. "August 2026" for a PDF statement. */
+  statementLabel?: string;
 }
 
 export interface PlannedRow {
@@ -72,10 +78,15 @@ export async function previewCsvImport(
   const planned: PlannedRow[] = [];
   const fileSummaries: ImportPreview["files"] = [];
   for (const f of files) {
-    const { rows, errors } = parseWellsFargoCsv(f.text, {
-      columnMap: f.columnMap,
-      sign: f.sign,
-    });
+    // PDF statements arrive pre-parsed (sign comes from the table's
+    // Deposits/Withdrawals columns, so no column map or sign applies).
+    const { rows, errors } =
+      f.kind === "pdf" && f.parsedRows
+        ? { rows: f.parsedRows, errors: f.parseErrors ?? [] }
+        : parseWellsFargoCsv(f.text, {
+            columnMap: f.columnMap,
+            sign: f.sign,
+          });
     fileSummaries.push({ fileName: f.fileName, rows: rows.length, errors });
     for (const row of rows) {
       planned.push({

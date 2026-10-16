@@ -155,4 +155,46 @@ describe("csvImport", () => {
   it("suggestBankKey derives a label from the file name", () => {
     expect(suggestBankKey("WF Checking 2024.csv")).toBe("wf-checking-2024");
   });
+
+  it("previews and commits pre-parsed PDF statement rows", async () => {
+    await setup();
+    const pdfFile: CsvFileInput = {
+      fileName: "Bank_statement_08_2026.pdf",
+      text: "",
+      bankKey: "bank-statement-08-2026",
+      appAccountId: "acct-checking",
+      kind: "pdf",
+      statementLabel: "August 2026",
+      parsedRows: [
+        { date: "2026-08-10", amountMinor: 7000, description: "Online Transfer From Savings", lineNumber: 3 },
+        { date: "2026-08-10", amountMinor: -809, description: "Corner Deli", lineNumber: 5 },
+      ],
+      parseErrors: ["Line 7: no amount found, skipped."],
+    };
+    const preview = await previewCsvImport(repos, [pdfFile]);
+    expect(preview.newCount).toBe(2);
+    expect(preview.files[0]?.errors).toEqual(["Line 7: no amount found, skipped."]);
+    expect(preview.files[0]?.rows).toBe(2);
+
+    const { importedIds } = await commitCsvImport(repos, preview, [pdfFile]);
+    expect(importedIds).toHaveLength(2);
+    const txs = await repos.transactions.getAll();
+    expect(txs).toHaveLength(2);
+    expect(txs.map((t) => t.payee)).toContain("Online Transfer From Savings");
+  });
+
+  it("mixes CSV and PDF files in one preview", async () => {
+    await setup();
+    const pdfFile: CsvFileInput = {
+      fileName: "stmt.pdf",
+      text: "",
+      bankKey: "stmt",
+      appAccountId: "acct-checking",
+      kind: "pdf",
+      parsedRows: [{ date: "2026-08-10", amountMinor: -809, description: "Corner Deli", lineNumber: 5 }],
+    };
+    const preview = await previewCsvImport(repos, [file("checking.csv", CHECKING_CSV), pdfFile]);
+    expect(preview.newCount).toBe(4);
+    expect(preview.files).toHaveLength(2);
+  });
 });

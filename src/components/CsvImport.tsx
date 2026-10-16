@@ -21,6 +21,8 @@ import { undoRecurringRule } from "../app/recurringDetect.js";
 import { exportAll, exportJsonFile, markBackedUp } from "../app/backup.js";
 import { todayLocal } from "../domain/dates/dateOnly.js";
 import { rollbackImportBatch, suggestBankKey, type CsvFileInput } from "../app/csvImport.js";
+import { parsePdfStatement } from "../app/pdfStatement.js";
+import type { ParsedBankRow } from "../domain/import/wellsFargoCsv.js";
 import { DEFAULT_SELF_NAME_VARIATIONS } from "../domain/import/selfTransfers.js";
 
 function repos() {
@@ -44,6 +46,12 @@ interface FileState {
   bankKey: string;
   appAccountId: string;
   sign: AmountSignConvention;
+  kind: "csv" | "pdf";
+  /** True while a PDF is being read/parsed. */
+  parsing: boolean;
+  parsedRows: ParsedBankRow[];
+  parseErrors: string[];
+  statementLabel: string | null;
 }
 
 function money(minor: number): string {
@@ -101,25 +109,56 @@ export function CsvImportSection() {
           rd.onerror = () => reject(new Error(`Could not read ${f.name}`));
           rd.readAsText(f);
         });
-      const next: FileState[] = [];
       for (const f of Array.from(list)) {
-        const text = await read(f).catch((e: Error) => {
-          setError(e.message);
-          return null;
-        });
-        if (text === null) continue;
-        const bankKey = suggestBankKey(f.name);
+        const isPdf = /\.pdf$/i.test(f.name);
+        const bankKey = suggestBankKey(isPdf ? f.name.replace(/\.pdf$/i, "") : f.name);
         const mapped = mapFor(bankKey);
-        next.push({
-          key: `${Date.now()}-${f.name}`,
+        const key = `${Date.now()}-${f.name}`;
+        const base: FileState = {
+          key,
           fileName: f.name,
-          text,
+          text: "",
           bankKey,
           appAccountId: mapped?.appAccountId ?? accounts[0]?.id ?? "",
           sign: "negative-is-outflow",
-        });
+          kind: isPdf ? "pdf" : "csv",
+          parsing: isPdf,
+          parsedRows: [],
+          parseErrors: [],
+          statementLabel: null,
+        };
+        if (!isPdf) {
+          const text = await read(f).catch((e: Error) => {
+            setError(e.message);
+            return null;
+          });
+          if (text === null) continue;
+          setFiles((prev) => [...prev, { ...base, text }]);
+          continue;
+        }
+        // PDF statement: read on-device with pdf.js, then parse the table
+        // now so preview/commit stay synchronous.
+        setFiles((prev) => [...prev, base]);
+        try {
+          const parsed = await parsePdfStatement(f);
+          setFiles((prev) =>
+            prev.map((x) =>
+              x.key === key
+                ? {
+                    ...x,
+                    parsing: false,
+                    parsedRows: parsed.rows,
+                    parseErrors: parsed.errors,
+                    statementLabel: parsed.statementLabel,
+                  }
+                : x,
+            ),
+          );
+        } catch (e) {
+          setFiles((prev) => prev.filter((x) => x.key !== key));
+          setError(e instanceof Error ? e.message : `Could not read ${f.name}`);
+        }
       }
-      setFiles((prev) => [...prev, ...next]);
     },
     [accounts, mapFor],
   );
@@ -135,6 +174,10 @@ export function CsvImportSection() {
         bankKey: f.bankKey.trim() || suggestBankKey(f.fileName),
         appAccountId: f.appAccountId,
         sign: f.sign,
+        kind: f.kind,
+        parsedRows: f.kind === "pdf" ? f.parsedRows : undefined,
+        parseErrors: f.kind === "pdf" ? f.parseErrors : undefined,
+        statementLabel: f.statementLabel ?? undefined,
       })),
     [files],
   );
@@ -251,17 +294,17 @@ export function CsvImportSection() {
       <input
         ref={fileRef}
         type="file"
-        accept=".csv,text/csv"
+        accept=".csv,text/csv,.pdf,application/pdf"
         multiple
         className="hidden"
-        aria-label="Choose CSV files"
+        aria-label="Choose CSV or PDF statement files"
         onChange={(e) => {
           void onPickFiles(e.target.files);
           e.target.value = "";
         }}
       />
       <button type="button" onClick={() => fileRef.current?.click()} className={secondaryBtnCls}>
-        Choose CSV files
+        Choose files
       </button>
 
       {files.length > 0 && (
@@ -271,7 +314,31 @@ export function CsvImportSection() {
               key={f.key}
               className="rounded-2xl border border-stone-200 p-3 dark:border-stone-700"
             >
-              <p className="text-sm font-medium text-stone-900 dark:text-stone-100">{f.fileName}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-stone-900 dark:text-stone-100">{f.fileName}</p>
+                {f.kind === "pdf" && (
+                  <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-600 dark:bg-stone-800 dark:text-stone-300">
+                    PDF{f.statementLabel ? ` · ${f.statementLabel}` : ""}
+                  </span>
+                )}
+              </div>
+              {f.parsing && (
+                <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">Reading statement…</p>
+              )}
+              {f.kind === "pdf" && !f.parsing && (
+                <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                  {f.parsedRows.length} transaction{f.parsedRows.length === 1 ? "" : "s"} found
+                  {f.parseErrors.length > 0 && ` · ${f.parseErrors.length} line${f.parseErrors.length === 1 ? "" : "s"} skipped`}
+                </p>
+              )}
+              {f.kind === "pdf" && f.parseErrors.length > 0 && (
+                <ul className="mt-1 list-disc pl-4 text-xs text-amber-700 dark:text-amber-400">
+                  {f.parseErrors.slice(0, 3).map((e, i) => (
+                    <li key={i}>{e}</li>
+                  ))}
+                  {f.parseErrors.length > 3 && <li>…and {f.parseErrors.length - 3} more</li>}
+                </ul>
+              )}
               <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <div>
                   <label className={labelCls} htmlFor={`bk-${f.key}`}>
@@ -305,15 +372,21 @@ export function CsvImportSection() {
                   <label className={labelCls} htmlFor={`sg-${f.key}`}>
                     Amount sign
                   </label>
-                  <select
-                    id={`sg-${f.key}`}
-                    className={inputCls}
-                    value={f.sign}
-                    onChange={(e) => updateFile(f.key, { sign: e.target.value as AmountSignConvention })}
-                  >
-                    <option value="negative-is-outflow">− = money out (checking/savings)</option>
-                    <option value="negative-is-inflow">− = money in (some card exports)</option>
-                  </select>
+                  {f.kind === "pdf" ? (
+                    <p className="px-3 py-2 text-xs text-stone-500 dark:text-stone-400">
+                      From the statement's Deposits/Withdrawals columns
+                    </p>
+                  ) : (
+                    <select
+                      id={`sg-${f.key}`}
+                      className={inputCls}
+                      value={f.sign}
+                      onChange={(e) => updateFile(f.key, { sign: e.target.value as AmountSignConvention })}
+                    >
+                      <option value="negative-is-outflow">− = money out (checking/savings)</option>
+                      <option value="negative-is-inflow">− = money in (some card exports)</option>
+                    </select>
+                  )}
                 </div>
               </div>
               {mapFor(f.bankKey.trim()) && (
@@ -332,7 +405,12 @@ export function CsvImportSection() {
             </div>
           ))}
           <div className="flex gap-2">
-            <button type="button" onClick={() => void doPreview()} disabled={working} className={primaryBtnCls}>
+            <button
+              type="button"
+              onClick={() => void doPreview()}
+              disabled={working || files.some((x) => x.parsing)}
+              className={primaryBtnCls}
+            >
               {working ? "Working…" : "Preview import"}
             </button>
           </div>
