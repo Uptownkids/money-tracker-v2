@@ -78,7 +78,7 @@ function defaultSettings(nowIso: string): Settings {
   };
 }
 
-/** Stamp settings.lastBackupAt to now (used by every export path). */
+/** Stamp settings.lastBackupAt to now (call only after the export actually completes). */
 export async function markBackedUp(repos: Repositories, nowIso: string): Promise<void> {
   const existing = await repos.settings.get();
   if (existing) {
@@ -88,11 +88,17 @@ export async function markBackedUp(repos: Repositories, nowIso: string): Promise
   }
 }
 
-/** Serialize every table to a versioned JSON object. Stamps lastBackupAt. */
+/**
+ * Serialize every table to a versioned JSON object. Does NOT stamp
+ * settings.lastBackupAt on the live database — the caller must call
+ * markBackedUp only after the export actually completes, because the
+ * user may cancel the share sheet without saving. The exported settings
+ * copy carries the backup time so the file itself reflects when it was
+ * made.
+ */
 export async function exportAll(repos: Repositories): Promise<BackupData> {
   const nowIso = new Date().toISOString();
-  // Stamp first so the exported settings row carries the fresh backup time.
-  await markBackedUp(repos, nowIso);
+  const settingsRows = await repos.settings.getAll();
   const tables: BackupTables = {
     accounts: await repos.accounts.getAll(),
     categories: await repos.categories.getAll(),
@@ -101,7 +107,7 @@ export async function exportAll(repos: Repositories): Promise<BackupData> {
     recurringOverrides: await repos.recurringOverrides.getAll(),
     goals: await repos.goals.getAll(),
     splits: await repos.splits.getAll(),
-    settings: await repos.settings.getAll(),
+    settings: settingsRows.map((s) => ({ ...s, lastBackupAt: nowIso })),
     paydayRuns: await repos.paydayRuns.getAll(),
     dailySnapshots: await repos.dailySnapshots.getAll(),
     snoozedMoves: await repos.snoozedMoves.getAll(),

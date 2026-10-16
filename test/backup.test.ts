@@ -123,7 +123,7 @@ describe("backup export/import round-trip", () => {
     expect(snooze).toMatchObject({ snoozedUntil: "2026-10-15" });
     const settings = await repos2.settings.get();
     expect(settings?.baseCurrency).toBe("USD");
-    // Export stamps the backup time.
+    // The exported file carries the backup time.
     expect(typeof settings?.lastBackupAt).toBe("string");
   });
 
@@ -320,5 +320,22 @@ describe("markBackedUp", () => {
     await repos.settings.save(mkSettings({ lastBackupAt: undefined }));
     await markBackedUp(repos, NOW);
     expect((await repos.settings.get())?.lastBackupAt).toBe(NOW);
+  });
+
+  it("exportAll does not stamp the live database (only a completed export may)", async () => {
+    db = new MoneyTrackerDB(`bk-nostamp-${Date.now()}`);
+    const repos = createRepositories(db);
+    await repos.settings.save(mkSettings({ lastBackupAt: undefined }));
+
+    const exported = await exportAll(repos);
+    // The file payload carries the backup time...
+    expect(typeof exported.tables.settings[0]?.lastBackupAt).toBe("string");
+    // ...but the live row is untouched until markBackedUp runs.
+    expect((await repos.settings.get())?.lastBackupAt).toBeUndefined();
+
+    // Simulating the success path: stamp after the export completes.
+    await markBackedUp(repos, NOW);
+    expect((await repos.settings.get())?.lastBackupAt).toBe(NOW);
+    expect(shouldRemindBackup((await repos.settings.get())?.lastBackupAt, NOW)).toBe(false);
   });
 });

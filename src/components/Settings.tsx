@@ -106,14 +106,11 @@ export function BackupBanner() {
     try {
       const data = await exportAll(repos());
       await exportJsonFile(`money-tracker-backup-${todayLocal()}.json`, data);
-    } catch (e) {
-      // Dismissing the share sheet is a cancel, not a failure: the export
-      // already stamped lastBackupAt, so the reminder will not nag again.
-      if (e instanceof DOMException && e.name === "AbortError") {
-        setVisible(false);
-        return;
-      }
-      // A real failure: stay visible so the user can retry.
+      // Only stamped after the export actually completes: cancelling the
+      // share sheet without saving keeps the reminder showing.
+      await markBackedUp(repos(), new Date().toISOString());
+    } catch {
+      // Cancelled or failed: nothing stamped, stay visible so the user can retry.
       return;
     } finally {
       setWorking(false);
@@ -366,6 +363,9 @@ export function SettingsSheet({
     try {
       const data = await exportAll(repos());
       await exportJsonFile(`money-tracker-backup-${todayLocal()}.json`, data);
+      // Only stamped after the export actually completes: cancelling the
+      // share sheet without saving leaves the reminder showing.
+      await markBackedUp(repos(), new Date().toISOString());
       const s = await repos().settings.get();
       if (s) setSettings({ ...defaultSettings(), ...s });
     } catch (e) {

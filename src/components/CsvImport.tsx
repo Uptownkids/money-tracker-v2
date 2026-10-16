@@ -18,7 +18,7 @@ import {
   type ImportPlan,
 } from "../app/importEngine.js";
 import { undoRecurringRule } from "../app/recurringDetect.js";
-import { exportAll, exportJsonFile } from "../app/backup.js";
+import { exportAll, exportJsonFile, markBackedUp } from "../app/backup.js";
 import { todayLocal } from "../domain/dates/dateOnly.js";
 import { rollbackImportBatch, suggestBankKey, type CsvFileInput } from "../app/csvImport.js";
 import { DEFAULT_SELF_NAME_VARIATIONS } from "../domain/import/selfTransfers.js";
@@ -196,15 +196,13 @@ export function CsvImportSection() {
     try {
       const data = await exportAll(repos());
       await exportJsonFile(`money-tracker-backup-${todayLocal()}.json`, data);
+      // Only stamped after the export actually completes: cancelling the
+      // share sheet without saving keeps the prompt showing.
+      await markBackedUp(repos(), new Date().toISOString());
       setBackupState("done");
-    } catch (e) {
-      // Dismissing the share sheet is a cancel, not a failure: the export
-      // already stamped lastBackupAt.
-      if (e instanceof DOMException && e.name === "AbortError") {
-        setBackupState("done");
-      } else {
-        setBackupState("idle");
-      }
+    } catch {
+      // Cancelled or failed: nothing stamped, prompt stays for retry.
+      setBackupState("idle");
     }
   }, []);
 
