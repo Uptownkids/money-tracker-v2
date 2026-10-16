@@ -51,6 +51,13 @@ export interface DashboardState {
   balances: Record<string, MinorUnits>;
   /** Base-currency total across spendable accounts (cash on hand). */
   cashOnHand: MinorUnits;
+  /**
+   * Safety buffer from settings. Display only: shown subtracted on the
+   * Cash on hand card, but the stored balance, reconciliation, statement
+   * checks, transfers, and safe-to-spend (which already counts the buffer
+   * in committed) all use the real balance.
+   */
+  safetyBuffer: MinorUnits;
   moves: TodaysMove[];
   nextPayday: DateOnly | null;
   /** True when today is a payday (for the cash card's "Payday today"). */
@@ -311,6 +318,7 @@ export async function loadDashboardState(): Promise<DashboardState> {
         (sum, a) => sum + convertToBase(balances[a.id] ?? 0, a.currency, a),
         0,
       ),
+    safetyBuffer: settings?.bufferAmount ?? 0,
     moves,
     nextPayday,
     isPaydayToday,
@@ -337,4 +345,15 @@ export async function refreshTodaySnapshot(): Promise<DailySnapshot> {
   );
   await repos.dailySnapshots.put(snapshot);
   return snapshot;
+}
+
+/**
+ * Displayed Cash on hand: the real balance minus the safety buffer when
+ * one is set. Display only — the stored balance, reconciliation,
+ * statement-balance checks, transfers, and safe-to-spend (which already
+ * counts the buffer inside committed) all keep using the real balance,
+ * so the buffer is never subtracted twice.
+ */
+export function displayedCashOnHand(cashOnHand: MinorUnits, buffer: MinorUnits): MinorUnits {
+  return buffer > 0 ? cashOnHand - buffer : cashOnHand;
 }
