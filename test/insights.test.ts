@@ -11,6 +11,7 @@ import {
   subscriptionTotals,
 } from "../src/domain/engine/insights.js";
 import { mkAccount, mkCategory, mkGoal, mkRule, mkSplit, mkTransaction } from "./helpers.js";
+import { transferCategoryIds } from "../src/domain/entities/category.js";
 import type { Transaction } from "../src/domain/entities/transaction.js";
 import type { DateOnly } from "../src/domain/dates/dateOnly.js";
 import type { DailySnapshot } from "../src/domain/entities/settings.js";
@@ -41,6 +42,25 @@ describe("monthlyCashFlow", () => {
     expect(cf.income).toBe(100000);
     expect(cf.expenses).toBe(0);
     expect(cf.net).toBe(100000);
+  });
+
+  it("excludes Expenses filed under a Transfer category from outflow", () => {
+    const transferCat = mkCategory({ id: "cat-transfer", name: "Transfer" });
+    const cats = transferCategoryIds([transferCat, mkCategory({ id: "food", name: "Food" })]);
+    expect(cats.has("cat-transfer")).toBe(true);
+    const txs = [
+      tx({ type: "Expense", amount: 40000, date: "2026-10-05", categoryId: "food" }),
+      tx({ type: "Expense", amount: 60000, date: "2026-10-06", categoryId: "cat-transfer" }),
+    ];
+    // Without the category set: old behavior (counts it).
+    expect(monthlyCashFlow(txs, OCT).expenses).toBe(100000);
+    // With the set: the transfer-like expense is excluded.
+    const cf = monthlyCashFlow(txs, OCT, (t) => t.amount, cats);
+    expect(cf.expenses).toBe(40000);
+    expect(cf.net).toBe(-40000);
+    // incomeVsOutflow threads it through too.
+    const buckets = incomeVsOutflow(txs, OCT, 1, (t) => t.amount, cats);
+    expect(buckets[0]!.outflow).toBe(40000);
   });
 
   it("excludes Income rows carrying a splitId (IOU settlements are not earned income)", () => {
@@ -100,6 +120,33 @@ describe("spendingByCategory", () => {
     expect(rows.map((r) => r.name)).toEqual(["Fun", "Uncategorized"]);
     expect(rows[0]!.amount).toBe(9000);
     expect(rows[1]!.amount).toBe(3000);
+  });
+
+  it("never shows Transfer as a spending category", () => {
+    const transferCat = mkCategory({ id: "cat-transfer", name: "Transfer" });
+    const renamed = mkCategory({ id: "cat-x", name: "Transfer" });
+    const txs = [
+      tx({ type: "Expense", amount: 9000, date: "2026-10-01", categoryId: "food" }),
+      // Expense filed under the seeded Transfer category.
+      tx({ type: "Expense", amount: 50000, date: "2026-10-02", categoryId: "cat-transfer" }),
+      // Same, but the category was renamed (id no longer matches the seed).
+      tx({ type: "Expense", amount: 20000, date: "2026-10-03", categoryId: "cat-x" }),
+      // Type Transfer is excluded too.
+      tx({ type: "Transfer", amount: 30000, date: "2026-10-04", transferToAccountId: "sav" }),
+    ];
+    const rows = spendingByCategory(txs, OCT, [food, fun, transferCat, renamed]);
+    expect(rows).toEqual([{ categoryId: "food", name: "Food", amount: 9000 }]);
+  });
+
+  it("sends a refund linked to a transfer to Uncategorized", () => {
+    const transferCat = mkCategory({ id: "cat-transfer", name: "Transfer" });
+    const txs = [
+      tx({ id: "e9", type: "Expense", amount: 50000, date: "2026-10-02", categoryId: "cat-transfer" }),
+      tx({ type: "Refund", amount: 5000, date: "2026-10-04", refundOfTransactionId: "e9" }),
+    ];
+    const rows = spendingByCategory(txs, OCT, [food, transferCat]);
+    // No Transfer bucket; the refund lands in Uncategorized.
+    expect(rows).toEqual([{ categoryId: null, name: "Uncategorized", amount: -5000 }]);
   });
 });
 
@@ -270,5 +317,31 @@ describe("subscriptionTotals", () => {
     const t = subscriptionTotals(rules, [], "2026-10-15");
     expect(t.perYear).toBe(10000);
     expect(t.perMonth).toBe(Math.round(10000 / 12));
+  });
+});
+
+describe("trendTickLabels", () => {
+  // Imported lazily: Insights.tsx pulls in recharts.
+  it("uses short months, year only on the first label and where it changes", async () => {
+    const { trendTickLabels } = await import("../src/components/Insights.js");
+    const keys = [
+      "2025-11", "2025-12",
+      "2026-01", "2026-02", "2026-03", "2026-04",
+      "2026-05", "2026-06", "2026-07", "2026-08",
+      "2026-09", "2026-10",
+    ];
+    expect(trendTickLabels(keys)).toEqual([
+      "Nov ’25", "Dec",
+      "Jan ’26", "Feb", "Mar", "Apr",
+      "May", "Jun", "Jul", "Aug",
+      "Sep", "Oct",
+    ]);
+  });
+
+  it("shows no year when all months are in one year", async () => {
+    const { trendTickLabels } = await import("../src/components/Insights.js");
+    expect(trendTickLabels(["2026-01", "2026-02", "2026-03"])).toEqual([
+      "Jan ’26", "Feb", "Mar",
+    ]);
   });
 });

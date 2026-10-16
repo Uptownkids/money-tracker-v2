@@ -28,3 +28,20 @@ export const DEFAULT_CATEGORIES: ReadonlyArray<{
   { name: "Transfer", kind: "expense", icon: "arrow-left-right", color: "slate" },
   { name: "Other", kind: "expense", icon: "dots", color: "slate" },
 ];
+
+/**
+ * IDs of categories that represent transfers rather than spending.
+ * Matches the seeded "Transfer" category by id or by case-insensitive
+ * name, so it survives renames and delete-and-recreate. Spending
+ * aggregations must exclude these: transfers are never spending, in any
+ * chart.
+ */
+export function transferCategoryIds(categories: readonly Category[]): Set<string> {
+  const ids = new Set<string>();
+  for (const c of categories) {
+    if (c.id === "cat-transfer" || c.name.trim().toLowerCase() === "transfer") {
+      ids.add(c.id);
+    }
+  }
+  return ids;
+}

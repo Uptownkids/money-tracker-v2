@@ -10,6 +10,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -21,6 +22,7 @@ import { formatMoney, formatWhole } from "../app/format.js";
 import { makeConverter } from "../app/dashboard.js";
 import { FxRateMemory } from "../domain/money/fx.js";
 import { decimalsOf } from "../domain/money/currency.js";
+import { transferCategoryIds } from "../domain/entities/category.js";
 import type { MinorUnits } from "../domain/money/money.js";
 import type { DateOnly } from "../domain/dates/dateOnly.js";
 import type { Account } from "../domain/entities/account.js";
@@ -49,13 +51,69 @@ const MONTHS = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-const BAR_DARK = "#44403c"; // stone-700
-const BAR_MID = "#a8a29e"; // stone-400
-const BAR_LIGHT = "#d6d3d1"; // stone-300
-
 function shortMonth(key: string): string {
   const m = Number(key.slice(5, 7));
   return `${MONTHS[m - 1]} ${key.slice(2, 4)}`;
+}
+
+/**
+ * X-axis labels for the 12-month income-vs-outflow trend, oldest first.
+ * Short month names ("Nov"); the 2-digit year appears only on the first
+ * label and where the year changes ("Nov ’25", "Jan ’26"), so ~6 labels
+ * fit a 375px phone screen without overlapping.
+ */
+export function trendTickLabels(monthKeys: string[]): string[] {
+  return monthKeys.map((k, i) => {
+    const m = Number(k.slice(5, 7));
+    const name = MONTHS[m - 1] ?? "";
+    const showYear = i === 0 || k.slice(0, 4) !== monthKeys[i - 1]!.slice(0, 4);
+    return showYear ? `${name} ’${k.slice(2, 4)}` : name;
+  });
+}
+
+/** True while the <html> element carries the dark class. Reactive. */
+function useDarkMode(): boolean {
+  const [dark, setDark] = useState(
+    () =>
+      typeof document !== "undefined" &&
+      document.documentElement.classList.contains("dark"),
+  );
+  useEffect(() => {
+    const el = document.documentElement;
+    const update = (): void => setDark(el.classList.contains("dark"));
+    update();
+    const obs = new MutationObserver(update);
+    obs.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return dark;
+}
+
+interface ChartPalette {
+  barStrong: string;
+  barSoft: string;
+  barFaint: string;
+  grid: string;
+  tick: string;
+}
+
+/** Recharts needs explicit colors; these mirror the Tailwind stone scale. */
+function chartPalette(dark: boolean): ChartPalette {
+  return dark
+    ? {
+        barStrong: "#d6d3d1", // stone-300
+        barSoft: "#78716c", // stone-500
+        barFaint: "#57534e", // stone-600
+        grid: "#292524", // stone-800
+        tick: "#a8a29e", // stone-400
+      }
+    : {
+        barStrong: "#44403c", // stone-700
+        barSoft: "#a8a29e", // stone-400
+        barFaint: "#d6d3d1", // stone-300
+        grid: "#e7e5e4", // stone-200
+        tick: "#57534e", // stone-600
+      };
 }
 
 function shortDate(d: DateOnly): string {
@@ -144,6 +202,7 @@ export function Insights() {
   const [baseCurrency, setBaseCurrency] = useState("USD");
   const [fxMemory] = useState(() => new FxRateMemory());
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const dark = useDarkMode();
 
   const load = useCallback(async () => {
     const repos = createRepositories(getActiveDb());
@@ -192,9 +251,11 @@ export function Insights() {
     const toBase = defaultTransactionToBase(accountCurrencyOf, convertToBase);
     const balanceToBase = (balance: MinorUnits, account: Account): MinorUnits =>
       convertToBase(balance, account.currency, account);
+    // Transfers are never spending, in any chart.
+    const transferCats = transferCategoryIds(categories);
 
     const balances = deriveBalances(accounts, transactions);
-    const cash = monthlyCashFlow(transactions, month, toBase);
+    const cash = monthlyCashFlow(transactions, month, toBase, transferCats);
     const refundsInMonth = transactions
       .filter((t) => t.type === "Refund" && t.date.slice(0, 7) === month && affectsBalance(t))
       .reduce<MinorUnits>((acc, t) => acc + toBase(t), 0);
@@ -204,11 +265,11 @@ export function Insights() {
       cash,
       refundsInMonth,
       categories: spendingByCategory(transactions, month, categories, toBase),
-      trend: incomeVsOutflow(transactions, month, 12, toBase),
+      trend: incomeVsOutflow(transactions, month, 12, toBase, transferCats),
       balances,
       worth: netWorth(balances),
       runway: runway(accounts, balances, transactions, today, toBase, balanceToBase),
-      history: spendingHistory(snapshots, transactions, toBase, baseCurrency),
+      history: spendingHistory(snapshots, transactions, toBase, baseCurrency, transferCats),
       goals: goalProgress(goals, transactions, toBase, new Map(accounts.map((a) => [a.id, a]))),
       ious: outstandingIous(splits, (amt, cur) => convertToBase(amt, cur)),
       subs: subscriptionTotals(rules, overrides, today),
@@ -226,6 +287,11 @@ export function Insights() {
   const div = 10 ** decimalsOf(baseCurrency);
   const tickFmt = (v: number): string => formatWhole(Math.round(v * div), baseCurrency);
   const hasAnyTx = transactions.some((t) => affectsBalance(t));
+  const palette = chartPalette(dark);
+  const tickStyle = { fontSize: 11, fill: palette.tick };
+  const trendLabels = trendTickLabels(stats.trend.map((b) => b.month));
+  // Daily chart: keep ~6 x labels on a 375px phone.
+  const dailyInterval = Math.max(0, Math.ceil(stats.history.days.length / 6) - 1);
 
   return (
     <div className="flex flex-col gap-4 pb-8">
@@ -332,16 +398,16 @@ export function Insights() {
                     layout="vertical"
                     margin={{ left: 8, right: 16 }}
                   >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" horizontal={false} />
-                    <XAxis type="number" tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} horizontal={false} />
+                    <XAxis type="number" tickFormatter={tickFmt} tick={tickStyle} />
                     <YAxis
                       type="category"
                       dataKey="name"
                       width={110}
-                      tick={{ fontSize: 12 }}
+                      tick={tickStyle}
                     />
                     <Tooltip content={<ChartTip currency={baseCurrency} />} />
-                    <Bar dataKey="amount" fill={BAR_DARK} radius={[0, 6, 6, 0]} />
+                    <Bar dataKey="amount" fill={palette.barStrong} radius={[0, 6, 6, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -352,19 +418,20 @@ export function Insights() {
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
-                  data={stats.trend.map((b) => ({
-                    label: shortMonth(b.month),
+                  data={stats.trend.map((b, i) => ({
+                    label: trendLabels[i],
                     income: b.income / div,
                     outflow: b.outflow / div,
                   }))}
                   margin={{ bottom: 4 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11 }} interval={0} />
-                  <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} width={56} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} vertical={false} />
+                  <XAxis dataKey="label" tick={tickStyle} interval={1} />
+                  <YAxis tickFormatter={tickFmt} tick={tickStyle} width={56} />
                   <Tooltip content={<ChartTip currency={baseCurrency} />} />
-                  <Bar dataKey="income" name="Income" fill={BAR_DARK} radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="outflow" name="Outflow" fill={BAR_MID} radius={[4, 4, 0, 0]} />
+                  <Legend wrapperStyle={{ fontSize: 12, color: palette.tick }} />
+                  <Bar dataKey="income" name="Income" fill={palette.barStrong} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="outflow" name="Outflow" fill={palette.barSoft} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -392,12 +459,13 @@ export function Insights() {
                       }))}
                       margin={{ bottom: 4 }}
                     >
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" vertical={false} />
-                      <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                      <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} width={56} />
+                      <CartesianGrid strokeDasharray="3 3" stroke={palette.grid} vertical={false} />
+                      <XAxis dataKey="label" tick={tickStyle} interval={dailyInterval} />
+                      <YAxis tickFormatter={tickFmt} tick={tickStyle} width={56} />
                       <Tooltip content={<ChartTip currency={baseCurrency} />} />
-                      <Bar dataKey="budget" name="Budget" fill={BAR_LIGHT} radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="spent" name="Spent" fill={BAR_DARK} radius={[4, 4, 0, 0]} />
+                      <Legend wrapperStyle={{ fontSize: 12, color: palette.tick }} />
+                      <Bar dataKey="budget" name="Budget" fill={palette.barFaint} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="spent" name="Spent" fill={palette.barStrong} radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

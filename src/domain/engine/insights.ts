@@ -19,6 +19,7 @@ import { addMinor, maxZero, roundDownToUnit, subMinor, sumMinor } from "../money
 import { decimalsOf } from "../money/currency.js";
 import type { Account } from "../entities/account.js";
 import type { Category } from "../entities/category.js";
+import { transferCategoryIds } from "../entities/category.js";
 import type { Goal } from "../entities/goal.js";
 import type { RecurringOverride, RecurringRule } from "../entities/recurringRule.js";
 import type { DailySnapshot } from "../entities/settings.js";
@@ -49,21 +50,44 @@ export function shiftMonthKey(month: string, n: number): string {
   return `${String(y).padStart(4, "0")}-${String(mm).padStart(2, "0")}` as MonthKey;
 }
 
+/** Empty transfer-category set: the default when the caller has no categories. */
+const NO_TRANSFER_CATEGORIES: ReadonlySet<string> = new Set<string>();
+
+/**
+ * True when the transaction is transfer-like and must never count as
+ * spending in any chart: type Transfer, or an Expense filed under a
+ * Transfer category.
+ */
+function isTransferLike(t: Transaction, transferCats: ReadonlySet<string>): boolean {
+  return (
+    t.type === "Transfer" ||
+    (t.type === "Expense" && t.categoryId != null && transferCats.has(t.categoryId))
+  );
+}
+
 /**
  * Net outflow for cash-flow math: expenses MINUS refunds. Refunds always
  * net against expenses, never against income. Transfers are excluded
- * entirely (including debt-payment Transfers, which move money between
- * accounts rather than spending it). Only affectsBalance rows
- * (Cleared/Pending) count; Scheduled rows never count.
+ * entirely (including debt-payment Transfers and Expenses filed under a
+ * Transfer category, which move money between accounts rather than
+ * spending it). Only affectsBalance rows (Cleared/Pending) count;
+ * Scheduled rows never count.
  */
 function outflowOf(
   transactions: readonly Transaction[],
   inMonth: (t: Transaction) => boolean,
   toBase: TransactionToBase,
+  transferCats: ReadonlySet<string> = NO_TRANSFER_CATEGORIES,
 ): MinorUnits {
   const expenses = sumMinor(
     transactions
-      .filter((t) => t.type === "Expense" && inMonth(t) && affectsBalance(t))
+      .filter(
+        (t) =>
+          t.type === "Expense" &&
+          inMonth(t) &&
+          affectsBalance(t) &&
+          !isTransferLike(t, transferCats),
+      )
       .map(toBase),
   );
   const refunds = sumMinor(
@@ -101,10 +125,11 @@ export function monthlyCashFlow(
   transactions: readonly Transaction[],
   month: string,
   toBase: TransactionToBase = rawTxAmount,
+  transferCats: ReadonlySet<string> = NO_TRANSFER_CATEGORIES,
 ): MonthlyCashFlow {
   const inMonth = (t: Transaction): boolean => monthOfDate(t.date) === month;
   const income = incomeOf(transactions, inMonth, toBase);
-  const expenses = outflowOf(transactions, inMonth, toBase);
+  const expenses = outflowOf(transactions, inMonth, toBase, transferCats);
   return { income, expenses, net: subMinor(income, expenses) };
 }
 
@@ -118,8 +143,10 @@ export interface CategorySpending {
  * Spending by category for one month, sorted descending. Expenses net
  * against refunds; a refund carrying refundOfTransactionId reduces the
  * linked expense's category, and a refund with no link (or a link that
- * cannot be found) reduces the Uncategorized bucket. Zero-net buckets
- * are dropped so the chart stays clean.
+ * cannot be found, or a link to a transfer) reduces the Uncategorized
+ * bucket. Transfer-like rows (type Transfer, or Expenses under a
+ * Transfer category) never appear. Zero-net buckets are dropped so the
+ * chart stays clean.
  */
 export function spendingByCategory(
   transactions: readonly Transaction[],
@@ -131,6 +158,7 @@ export function spendingByCategory(
   for (const t of transactions) byId.set(t.id, t);
   const names = new Map<string, string>();
   for (const c of categories) names.set(c.id, c.name);
+  const transferCats = transferCategoryIds(categories);
 
   const totals = new Map<string | null, MinorUnits>();
   const add = (key: string | null, amount: MinorUnits) => {
@@ -139,14 +167,19 @@ export function spendingByCategory(
 
   for (const t of transactions) {
     if (monthOfDate(t.date) !== month || !affectsBalance(t)) continue;
+    if (isTransferLike(t, transferCats)) continue;
     const amt = toBase(t);
     if (t.type === "Expense") {
       add(t.categoryId, amt);
     } else if (t.type === "Refund") {
       // Refunds subtract from the linked expense's category so category
-      // totals reflect money truly spent.
+      // totals reflect money truly spent. A refund linked to a transfer
+      // reduces Uncategorized instead of creating a Transfer bucket.
       const linked = t.refundOfTransactionId ? byId.get(t.refundOfTransactionId) : undefined;
-      const key = linked && linked.type === "Expense" ? linked.categoryId : null;
+      const key =
+        linked && linked.type === "Expense" && !isTransferLike(linked, transferCats)
+          ? linked.categoryId
+          : null;
       add(key, -amt);
     }
   }
@@ -180,6 +213,7 @@ export function incomeVsOutflow(
   endMonth: string,
   months = 12,
   toBase: TransactionToBase = rawTxAmount,
+  transferCats: ReadonlySet<string> = NO_TRANSFER_CATEGORIES,
 ): MonthBucket[] {
   const out: MonthBucket[] = [];
   for (let i = months - 1; i >= 0; i--) {
@@ -188,7 +222,7 @@ export function incomeVsOutflow(
     out.push({
       month,
       income: incomeOf(transactions, inMonth, toBase),
-      outflow: outflowOf(transactions, inMonth, toBase),
+      outflow: outflowOf(transactions, inMonth, toBase, transferCats),
     });
   }
   return out;
@@ -215,6 +249,7 @@ export function runway(
   today: DateOnly,
   toBase: TransactionToBase = rawTxAmount,
   balanceToBase: (balance: MinorUnits, account: Account) => MinorUnits = (b) => b,
+  transferCats: ReadonlySet<string> = NO_TRANSFER_CATEGORIES,
 ): Runway {
   let liquid: MinorUnits = 0;
   for (const a of accounts) {
@@ -225,7 +260,7 @@ export function runway(
   const windowed = transactions.filter(
     (t) => compareDateOnly(t.date, windowStart) >= 0 && compareDateOnly(t.date, today) <= 0,
   );
-  const trailing30 = outflowOf(windowed, () => true, toBase);
+  const trailing30 = outflowOf(windowed, () => true, toBase, transferCats);
   const avgDailySpending = Math.max(0, trailing30) / 30;
   if (avgDailySpending === 0) {
     return { liquid, avgDailySpending: 0, days: null };
@@ -261,6 +296,7 @@ export function spendingHistory(
   transactions: readonly Transaction[],
   toBase: TransactionToBase,
   baseCurrency: string,
+  transferCats: ReadonlySet<string> = NO_TRANSFER_CATEGORIES,
 ): SpendingHistory {
   const decimals = decimalsOf(baseCurrency);
   const sorted = [...snapshots].sort((a, b) => compareDateOnly(a.date, b.date));
@@ -272,7 +308,7 @@ export function spendingHistory(
     const budget = maxZero(
       roundDownToUnit(Math.floor(subMinor(s.available, s.committed) / daysLeft), decimals),
     );
-    const spent = computeTodaySpending(transactions, s.date, toBase);
+    const spent = computeTodaySpending(transactions, s.date, toBase, transferCats);
     const status: DayStatus = spent <= budget ? "under" : "over";
     if (status === "under") under += 1;
     else over += 1;
