@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { getDb } from "../src/data/db.js";
 import { createRepositories } from "../src/data/repositories/index.js";
 import {
+  displayedCashOnHand,
   loadDashboardState,
   makeConverter,
   refreshTodaySnapshot,
@@ -70,6 +71,73 @@ describe("refreshTodaySnapshot", () => {
     // The overwrite persists: a fresh load reads the refreshed snapshot.
     const after = await loadDashboardState();
     expect(after.snapshot.available).toBe(availableBefore + 226341);
+  });
+});
+
+describe("displayedCashOnHand", () => {
+  it("shows the full balance when the buffer is 0", () => {
+    expect(displayedCashOnHand(172120, 0)).toBe(172120);
+  });
+
+  it("subtracts the buffer for display only", () => {
+    expect(displayedCashOnHand(172120, 30000)).toBe(142120);
+  });
+
+  it("can go negative when the buffer exceeds the balance (honest display)", () => {
+    expect(displayedCashOnHand(10000, 30000)).toBe(-20000);
+  });
+});
+
+describe("safetyBuffer in loadDashboardState", () => {
+  afterEach(async () => {
+    const db = getDb();
+    await db
+      .transaction("rw", db.tables, async () => {
+        await Promise.all(db.tables.map((t) => t.clear()));
+      })
+      .catch(() => {});
+  });
+
+  it("exposes the buffer while cashOnHand stays the real balance", async () => {
+    const db = getDb();
+    const repos = createRepositories(db);
+    await repos.accounts.put(
+      mkAccount({
+        id: "chk",
+        name: "Checking",
+        type: "Checking",
+        currency: "USD",
+        startingBalance: 172120,
+        countsAsSpendable: true,
+      }),
+    );
+    await repos.settings.save({ ...SETTINGS, bufferAmount: 30000 });
+
+    const state = await loadDashboardState();
+    expect(state.safetyBuffer).toBe(30000);
+    // Display only: the stored balance is untouched.
+    expect(state.cashOnHand).toBe(172120);
+    expect(displayedCashOnHand(state.cashOnHand, state.safetyBuffer)).toBe(142120);
+  });
+
+  it("defaults the buffer to 0", async () => {
+    const db = getDb();
+    const repos = createRepositories(db);
+    await repos.accounts.put(
+      mkAccount({
+        id: "chk",
+        name: "Checking",
+        type: "Checking",
+        currency: "USD",
+        startingBalance: 172120,
+        countsAsSpendable: true,
+      }),
+    );
+    await repos.settings.save(SETTINGS);
+
+    const state = await loadDashboardState();
+    expect(state.safetyBuffer).toBe(0);
+    expect(displayedCashOnHand(state.cashOnHand, state.safetyBuffer)).toBe(state.cashOnHand);
   });
 });
 

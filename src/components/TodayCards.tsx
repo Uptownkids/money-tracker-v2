@@ -17,6 +17,7 @@
  */
 import { useState, type ReactNode } from "react";
 import type { DashboardState } from "../app/dashboard.js";
+import { displayedCashOnHand } from "../app/dashboard.js";
 import { formatMoney } from "../app/format.js";
 import type { MinorUnits } from "../domain/money/money.js";
 
@@ -81,6 +82,8 @@ function CashBreakdownSheet({
   onClose: () => void;
 }) {
   const spendable = state.accounts.filter((a) => a.countsAsSpendable);
+  const buffer = state.safetyBuffer ?? 0;
+  const currency = state.baseCurrency ?? "USD";
   return (
     <SheetShell title="Cash on hand" onClose={onClose}>
       <div className="flex flex-col gap-1 pt-3">
@@ -99,14 +102,32 @@ function CashBreakdownSheet({
         ))}
       </div>
       <div className="flex items-center justify-between border-t border-stone-100 dark:border-stone-800 px-3 pt-3 mt-2">
-        <p className="text-sm font-medium text-stone-500 dark:text-stone-400">Total</p>
+        <p className="text-sm font-medium text-stone-500 dark:text-stone-400">Total balance</p>
         <p className="font-display text-xl text-stone-900 dark:text-stone-100">
-          {formatMoney(state.cashOnHand, state.baseCurrency ?? "USD")}
+          {formatMoney(state.cashOnHand, currency)}
         </p>
       </div>
+      {buffer > 0 && (
+        <>
+          <div className="flex items-center justify-between px-3 pt-2">
+            <p className="text-sm font-medium text-stone-500 dark:text-stone-400">Safety buffer</p>
+            <p className="font-display text-lg text-stone-900 dark:text-stone-100">
+              −{formatMoney(buffer, currency)}
+            </p>
+          </div>
+          <div className="flex items-center justify-between px-3 pt-2">
+            <p className="text-sm font-medium text-stone-900 dark:text-stone-100">After buffer</p>
+            <p className="font-display text-xl text-stone-900 dark:text-stone-100">
+              {formatMoney(displayedCashOnHand(state.cashOnHand, buffer), currency)}
+            </p>
+          </div>
+        </>
+      )}
       <p className="px-3 pt-3 text-xs leading-relaxed text-stone-500 dark:text-stone-400">
         Spendable accounts only. Savings, credit cards, and loans are never
         counted here.
+        {buffer > 0 &&
+          " The buffer is display only — reconciliation and transfers use the full balance."}
       </p>
     </SheetShell>
   );
@@ -201,6 +222,7 @@ export function TodayCards({
   const currency = state.baseCurrency ?? "USD";
   const { result, snapshot, heroState } = state;
   const deficit = heroState === "deficit";
+  const buffer = state.safetyBuffer ?? 0;
 
   const cashSubtitle = state.isPaydayToday
     ? "Payday today"
@@ -226,10 +248,10 @@ export function TodayCards({
           className="rounded-3xl border border-indigo-100 dark:border-indigo-900/40 bg-indigo-50/70 dark:bg-indigo-950/40 px-5 py-4 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-transform active:scale-[0.99]"
         >
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700 dark:text-blue-300">
-            Cash on hand
+            {buffer > 0 ? `Cash on hand (after ${formatMoney(buffer, currency)} buffer)` : "Cash on hand"}
           </p>
           <p className="pt-2 font-display text-4xl leading-none tracking-tight text-stone-900 dark:text-stone-100">
-            {formatMoney(state.cashOnHand, currency)}
+            {formatMoney(displayedCashOnHand(state.cashOnHand, buffer), currency)}
           </p>
           <p className="pt-2 text-xs text-stone-500 dark:text-stone-400">{cashSubtitle}</p>
         </button>
