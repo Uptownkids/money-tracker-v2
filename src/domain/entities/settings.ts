@@ -6,7 +6,7 @@ export interface Settings {
   baseCurrency: string;
   bufferAmount: MinorUnits; // optional safety buffer, default 0
   theme: "system" | "light" | "dark";
-  lastBackupAt?: string; // drives the 30-day backup reminder
+  lastBackupAt?: string; // drives the 14-day backup reminder
   // Irregular income fallback, used when no primary payday is set
   nextExpectedIncomeDate?: DateOnly;
   nextExpectedIncomeAmount?: MinorUnits;

@@ -22,7 +22,7 @@ import { decimalsOf } from "../domain/money/currency.js";
 
 export const BACKUP_VERSION = 1;
 /** Days without a backup before the banner nudges. */
-export const BACKUP_REMINDER_DAYS = 30;
+export const BACKUP_REMINDER_DAYS = 14;
 
 export interface BackupTables {
   accounts: Account[];
@@ -420,7 +420,7 @@ export function transactionsToCsv(
 
 /**
  * True when a backup reminder is due: never backed up, or the last one
- * is more than 30 days old. Pure; both inputs are ISO strings.
+ * is more than 14 days old. Pure; both inputs are ISO strings.
  */
 export function shouldRemindBackup(
   lastBackupAt: string | undefined,

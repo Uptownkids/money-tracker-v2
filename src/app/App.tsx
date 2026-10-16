@@ -49,6 +49,7 @@ import { SettingsSheet, BackupBanner } from "../components/Settings.js";
 import { PaydayRun } from "../components/PaydayRun.js";
 import { ReviewInboxSheet } from "../components/ReviewInbox.js";
 import { applySwUpdate, onSwUpdate } from "./swUpdates.js";
+import { requestPersistentStorage } from "./persistentStorage.js";
 import { loadDemoData } from "./seed.js";
 
 type Tab = "dashboard" | "log" | "bills" | "goals" | "accounts" | "insights" | "history";
@@ -289,6 +290,9 @@ export function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   // Service worker update banner.
   const [swUpdateAvailable, setSwUpdateAvailable] = useState(false);
+  // Persistent storage request on app start (navigator.storage.persist()).
+  // Null until the browser answers; Settings shows the granted state.
+  const [storagePersisted, setStoragePersisted] = useState<boolean | null>(null);
   // One-tap deep links (?add= / ?adjust=).
   const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
   const [deepLinkNotReady, setDeepLinkNotReady] = useState(false);
@@ -307,6 +311,18 @@ export function App() {
   // onSwUpdate fires immediately if an update is already waiting, so late
   // subscribers never miss it.
   useEffect(() => onSwUpdate(() => setSwUpdateAvailable(true)), []);
+
+  // Ask the browser to keep this origin's IndexedDB under storage
+  // pressure. Idempotent; safe under StrictMode's double-invoked effects.
+  useEffect(() => {
+    let alive = true;
+    void requestPersistentStorage().then((granted) => {
+      if (alive) setStoragePersisted(granted);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -693,7 +709,7 @@ export function App() {
         {tab === "dashboard" && (
           <>
             {isDemoMode() && <DemoBanner onChanged={reload} />}
-            <BackupBanner onOpenSettings={() => setSettingsOpen(true)} />
+            <BackupBanner />
 
             {error ? (
               <LoadError onRetry={reload} />
@@ -806,6 +822,7 @@ export function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onChanged={reload}
+        storagePersisted={storagePersisted}
       />
 
       {toast && (

@@ -86,8 +86,10 @@ function formatLastBackup(lastBackupAt: string | undefined): string {
 }
 
 /** "It's been a while" banner. The coordinator mounts it on the dashboard. */
-export function BackupBanner({ onOpenSettings }: { onOpenSettings: () => void }) {
+export function BackupBanner() {
   const [visible, setVisible] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [done, setDone] = useState(false);
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -99,19 +101,43 @@ export function BackupBanner({ onOpenSettings }: { onOpenSettings: () => void })
     };
   }, []);
 
+  const doBackup = async () => {
+    setWorking(true);
+    try {
+      const data = await exportAll(repos());
+      await exportJsonFile(`money-tracker-backup-${todayLocal()}.json`, data);
+    } catch (e) {
+      // Dismissing the share sheet is a cancel, not a failure: the export
+      // already stamped lastBackupAt, so the reminder will not nag again.
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setVisible(false);
+        return;
+      }
+      // A real failure: stay visible so the user can retry.
+      return;
+    } finally {
+      setWorking(false);
+    }
+    setDone(true);
+    window.setTimeout(() => setVisible(false), 2500);
+  };
+
   if (!visible) return null;
   return (
     <div className="flex items-center justify-between gap-3 rounded-2xl bg-amber-50 px-4 py-3 ring-1 ring-inset ring-amber-200 dark:bg-amber-950 dark:ring-amber-800">
       <p className="text-sm text-amber-800 dark:text-amber-200">
-        It&rsquo;s been a while since your last backup.
+        {done ? "Backed up. Your data is safe." : "It\u2019s been a while since your last backup."}
       </p>
-      <button
-        type="button"
-        onClick={onOpenSettings}
-        className="shrink-0 rounded-full bg-stone-900 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-200"
-      >
-        Back up now
-      </button>
+      {!done && (
+        <button
+          type="button"
+          onClick={() => void doBackup()}
+          disabled={working}
+          className="shrink-0 rounded-full bg-stone-900 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-stone-700 disabled:opacity-60 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-200"
+        >
+          {working ? "Working\u2026" : "Export backup"}
+        </button>
+      )}
     </div>
   );
 }
@@ -128,10 +154,13 @@ export function SettingsSheet({
   open,
   onClose,
   onChanged,
+  storagePersisted,
 }: {
   open: boolean;
   onClose: () => void;
   onChanged: () => void;
+  /** Result of the navigator.storage.persist() request on app start; null while unknown. */
+  storagePersisted: boolean | null;
 }) {
   const [settings, setSettings] = useState<SettingsEntity | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -600,6 +629,14 @@ export function SettingsSheet({
               >
                 <p className="text-xs text-stone-500 dark:text-stone-400">
                   Last backup: {formatLastBackup(settings.lastBackupAt)}
+                </p>
+                <p className="text-xs text-stone-500 dark:text-stone-400">
+                  Persistent storage:{" "}
+                  {storagePersisted === null
+                    ? "Checking…"
+                    : storagePersisted
+                      ? "Granted — the browser will keep your data under storage pressure."
+                      : "Not granted — keep exporting backups; the browser may clear site data when space runs low."}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => void doExportJson()} disabled={exporting} className={primaryBtnCls}>

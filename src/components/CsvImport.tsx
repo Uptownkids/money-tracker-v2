@@ -18,6 +18,8 @@ import {
   type ImportPlan,
 } from "../app/importEngine.js";
 import { undoRecurringRule } from "../app/recurringDetect.js";
+import { exportAll, exportJsonFile } from "../app/backup.js";
+import { todayLocal } from "../domain/dates/dateOnly.js";
 import { rollbackImportBatch, suggestBankKey, type CsvFileInput } from "../app/csvImport.js";
 import { DEFAULT_SELF_NAME_VARIATIONS } from "../domain/import/selfTransfers.js";
 
@@ -57,6 +59,8 @@ export function CsvImportSection() {
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [summary, setSummary] = useState<CommitSummary | null>(null);
   const [statements, setStatements] = useState<Record<string, string>>({});
+  // One-tap backup prompt shown after each successful import.
+  const [backupState, setBackupState] = useState<"idle" | "working" | "done">("idle");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
@@ -175,6 +179,7 @@ export function CsvImportSection() {
         Object.keys(statementBalances).length > 0 ? statementBalances : undefined,
       );
       setSummary(result);
+      setBackupState("idle");
       setFiles([]);
       setPlan(null);
       setStatements({});
@@ -185,6 +190,23 @@ export function CsvImportSection() {
       setWorking(false);
     }
   }, [plan, toInputs, statements, load]);
+
+  const doBackup = useCallback(async () => {
+    setBackupState("working");
+    try {
+      const data = await exportAll(repos());
+      await exportJsonFile(`money-tracker-backup-${todayLocal()}.json`, data);
+      setBackupState("done");
+    } catch (e) {
+      // Dismissing the share sheet is a cancel, not a failure: the export
+      // already stamped lastBackupAt.
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setBackupState("done");
+      } else {
+        setBackupState("idle");
+      }
+    }
+  }, []);
 
   const doUndoRecurring = useCallback(
     async (ruleId: string) => {
@@ -468,6 +490,21 @@ export function CsvImportSection() {
                 ))}
             </ul>
           )}
+          <div className="mt-3 flex items-center justify-between gap-3 border-t border-emerald-200 pt-3 dark:border-emerald-800">
+            <p className="text-sm text-emerald-800 dark:text-emerald-200">
+              {backupState === "done" ? "Backed up." : "Keep a copy of your data safe."}
+            </p>
+            {backupState !== "done" && (
+              <button
+                type="button"
+                onClick={() => void doBackup()}
+                disabled={backupState === "working"}
+                className={secondaryBtnCls}
+              >
+                {backupState === "working" ? "Working…" : "Export backup"}
+              </button>
+            )}
+          </div>
         </div>
       )}
 

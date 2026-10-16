@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MoneyTrackerDB } from "../src/data/db.js";
 import { createRepositories, type Repositories } from "../src/data/repositories/index.js";
 import {
+  BACKUP_REMINDER_DAYS,
   exportAll,
   importAll,
   markBackedUp,
@@ -286,16 +287,20 @@ describe("shouldRemindBackup", () => {
     expect(shouldRemindBackup(undefined, NOW_ISO)).toBe(true);
   });
 
-  it("does not remind at 29 days", () => {
-    expect(shouldRemindBackup("2026-09-16T12:00:00.000Z", NOW_ISO)).toBe(false);
+  it("uses a 14-day reminder window", () => {
+    expect(BACKUP_REMINDER_DAYS).toBe(14);
   });
 
-  it("reminds at 31 days", () => {
-    expect(shouldRemindBackup("2026-09-14T12:00:00.000Z", NOW_ISO)).toBe(true);
+  it("does not remind at 13 days", () => {
+    expect(shouldRemindBackup("2026-10-02T12:00:00.000Z", NOW_ISO)).toBe(false);
   });
 
-  it("does not remind at exactly 30 days", () => {
-    expect(shouldRemindBackup("2026-09-15T12:00:00.000Z", NOW_ISO)).toBe(false);
+  it("reminds at 15 days", () => {
+    expect(shouldRemindBackup("2026-09-30T12:00:00.000Z", NOW_ISO)).toBe(true);
+  });
+
+  it("does not remind at exactly 14 days", () => {
+    expect(shouldRemindBackup("2026-10-01T12:00:00.000Z", NOW_ISO)).toBe(false);
   });
 
   it("reminds on garbage input", () => {
