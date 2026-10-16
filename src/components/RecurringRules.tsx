@@ -32,6 +32,7 @@ import { formatMoney } from "../app/format.js";
 import { decimalsOf } from "../domain/money/currency.js";
 import type { Account } from "../domain/entities/account.js";
 import type { Category } from "../domain/entities/category.js";
+import { expenseCategories } from "../domain/entities/category.js";
 import type { MinorUnits } from "../domain/money/money.js";
 
 const fieldCls =
@@ -277,9 +278,10 @@ export function RecurringRules({ onChanged, onStartPaydayRun, editRuleId, onEdit
 
   /* ------------------------- create/edit sheet ------------------------- */
 
-  const visibleCategories = categories.filter((c) =>
-    kind === "Income" ? c.kind === "income" : c.kind === "expense",
-  );
+  const visibleCategories =
+    kind === "Income"
+      ? categories.filter((c) => c.kind === "income")
+      : expenseCategories(categories);
 
   const openSheet = (toEdit: RecurringRule | null, presetKind: RecurringKind) => {
     const k = toEdit ? toEdit.kind : presetKind;
@@ -288,9 +290,10 @@ export function RecurringRules({ onChanged, onStartPaydayRun, editRuleId, onEdit
     setName(toEdit?.name ?? "");
     setAmountText(toEdit ? minorToDollarsText(toEdit.amount, toEdit.currency) : "");
     setAccountId(toEdit?.accountId ?? accounts[0]?.id ?? "");
-    const catsForKind = categories.filter((c) =>
-      k === "Income" ? c.kind === "income" : c.kind === "expense",
-    );
+    const catsForKind =
+      k === "Income"
+        ? categories.filter((c) => c.kind === "income")
+        : expenseCategories(categories);
     setCategoryId(toEdit?.categoryId ?? catsForKind[0]?.id ?? "");
     setFrequency(toEdit?.frequency ?? "monthly");
     setIntervalText(String(toEdit?.customIntervalDays ?? 30));
@@ -331,9 +334,10 @@ export function RecurringRules({ onChanged, onStartPaydayRun, editRuleId, onEdit
 
   const onKindChange = (k: RecurringKind) => {
     setKind(k);
-    const first = categories.find((c) =>
-      k === "Income" ? c.kind === "income" : c.kind === "expense",
-    );
+    const first =
+      k === "Income"
+        ? categories.find((c) => c.kind === "income")
+        : expenseCategories(categories)[0];
     setCategoryId(first?.id ?? "");
     if (!editing) {
       setWeekendShift(k === "Income" ? "previous-business-day" : "none");

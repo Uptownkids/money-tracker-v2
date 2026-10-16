@@ -46,6 +46,7 @@ import { Insights } from "../components/Insights.js";
 import { History } from "../components/History.js";
 import { Onboarding } from "../components/Onboarding.js";
 import { SettingsSheet, BackupBanner } from "../components/Settings.js";
+import { TransferReviewBanner } from "../components/TransferReview.js";
 import { PaydayRun } from "../components/PaydayRun.js";
 import { ReviewInboxSheet } from "../components/ReviewInbox.js";
 import { applySwUpdate, onSwUpdate } from "./swUpdates.js";
@@ -710,6 +711,7 @@ export function App() {
           <>
             {isDemoMode() && <DemoBanner onChanged={reload} />}
             <BackupBanner />
+            <TransferReviewBanner onChanged={reload} />
 
             {error ? (
               <LoadError onRetry={reload} />

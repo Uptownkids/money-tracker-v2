@@ -20,6 +20,7 @@ import type { DateOnly } from "../domain/dates/dateOnly.js";
 import type { MinorUnits } from "../domain/money/money.js";
 import type { Account } from "../domain/entities/account.js";
 import type { Category } from "../domain/entities/category.js";
+import { expenseCategories } from "../domain/entities/category.js";
 import type {
   Transaction,
   TransactionType,
@@ -303,9 +304,10 @@ export function TransactionEditSheet({
     }
   };
 
-  const visibleCategories = categories.filter((c) =>
-    effectiveType === "Income" ? c.kind === "income" : c.kind === "expense",
-  );
+  const visibleCategories =
+    effectiveType === "Income"
+      ? categories.filter((c) => c.kind === "income")
+      : expenseCategories(categories);
 
   const nothingChanged =
     !amountChanged && !dateChanged && !accountChanged && !categoryChanged &&
