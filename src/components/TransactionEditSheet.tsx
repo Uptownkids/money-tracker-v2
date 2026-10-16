@@ -107,6 +107,7 @@ export function TransactionEditSheet({
   const [categoryId, setCategoryId] = useState(tx.categoryId ?? "");
   const [payee, setPayee] = useState(tx.payee);
   const [notes, setNotes] = useState(tx.notes);
+  const [isBusiness, setIsBusiness] = useState(tx.tags.includes("business"));
   const [date, setDate] = useState<DateOnly>(tx.date);
   const [phase, setPhase] = useState<"form" | "scope">("form");
   const [rule, setRule] = useState<RecurringRule | null>(null);
@@ -260,6 +261,9 @@ export function TransactionEditSheet({
         categoryId: effectiveType === "Transfer" ? null : categoryId || null,
         payee: payee.trim(),
         notes: notes.trim(),
+        tags: isBusiness
+          ? [...new Set([...tx.tags, "business"])]
+          : tx.tags.filter((t) => t !== "business"),
         updatedAt: nowIso,
       };
       if (effectiveType === "Transfer") {
@@ -306,7 +310,7 @@ export function TransactionEditSheet({
   const nothingChanged =
     !amountChanged && !dateChanged && !accountChanged && !categoryChanged &&
     !toAccountChanged && !payeeChanged && !notesChanged && !typeChanged &&
-    !goalChanged;
+    !goalChanged && isBusiness === tx.tags.includes("business");
 
   return (
     <SheetShell title="Edit transaction" onClose={onClose}>
@@ -463,6 +467,16 @@ export function TransactionEditSheet({
             className={fieldCls}
           />
         </div>
+
+        <label className="flex items-center gap-2 text-sm text-stone-700 dark:text-stone-300">
+          <input
+            id="et-business"
+            type="checkbox"
+            checked={isBusiness}
+            onChange={(e) => setIsBusiness(e.target.checked)}
+          />
+          Business expense
+        </label>
 
         <div>
           <label htmlFor="et-date" className={labelCls}>

@@ -43,6 +43,7 @@ import { Goals } from "../components/Goals.js";
 import { Upcoming } from "../components/Upcoming.js";
 import { Ious } from "../components/Ious.js";
 import { Insights } from "../components/Insights.js";
+import { History } from "../components/History.js";
 import { Onboarding } from "../components/Onboarding.js";
 import { SettingsSheet, BackupBanner } from "../components/Settings.js";
 import { PaydayRun } from "../components/PaydayRun.js";
@@ -50,7 +51,7 @@ import { ReviewInboxSheet } from "../components/ReviewInbox.js";
 import { applySwUpdate, onSwUpdate } from "./swUpdates.js";
 import { loadDemoData } from "./seed.js";
 
-type Tab = "dashboard" | "log" | "bills" | "goals" | "accounts" | "insights";
+type Tab = "dashboard" | "log" | "bills" | "goals" | "accounts" | "insights" | "history";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
@@ -59,6 +60,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "goals", label: "Goals" },
   { id: "accounts", label: "Accounts" },
   { id: "insights", label: "Insights" },
+  { id: "history", label: "History" },
 ];
 
 function Loading() {
@@ -752,6 +754,7 @@ export function App() {
         {tab === "accounts" && <Accounts onChanged={reload} />}
 
         {tab === "insights" && <Insights />}
+        {tab === "history" && <History />}
       </div>
 
       <QuickLog
