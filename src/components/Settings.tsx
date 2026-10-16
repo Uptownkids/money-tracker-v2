@@ -602,7 +602,7 @@ export function SettingsSheet({
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => void doExportJson()} disabled={exporting} className={primaryBtnCls}>
-                    {exporting ? "Working…" : "Export backup"}
+                    {exporting ? "Working…" : "Back up"}
                   </button>
                   <button type="button" onClick={() => void doExportCsv()} disabled={exporting} className={secondaryBtnCls}>
                     Export transactions CSV
