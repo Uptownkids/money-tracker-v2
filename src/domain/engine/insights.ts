@@ -295,7 +295,14 @@ export function goalProgress(
   accountsById?: AccountsById,
 ): GoalProgress[] {
   return goals.map((goal) => {
-    const saved = deriveGoalSaved(goal.id, transactions, undefined, toBase, accountsById);
+    const saved = deriveGoalSaved(
+      goal.id,
+      transactions,
+      undefined,
+      toBase,
+      accountsById,
+      goal.linkedSavingsAccountId,
+    );
     const pct =
       goal.targetAmount > 0
         ? Math.min(100, Math.max(0, (saved / goal.targetAmount) * 100))

@@ -191,7 +191,7 @@ export async function loadDashboardState(): Promise<DashboardState> {
   const goalContributions = new Map<string, MinorUnits>();
   for (const goal of activeGoals) {
     const earmarked = earmarkedInSpendable(goal.id, transactions, accountsById, txToBase);
-    const funded = fundedThisCycle(goal.id, transactions, cycleStart, cycleEnd, accountsById, txToBase);
+    const funded = fundedThisCycle(goal.id, transactions, cycleStart, cycleEnd, accountsById, txToBase, goal.linkedSavingsAccountId);
     const cyclesRemaining = primaryRule
       ? countPaydays(cycleStart, goalTargetDateOrDefault(goal, cycleStart), primaryRule)
       : 0;

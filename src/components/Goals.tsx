@@ -556,7 +556,7 @@ export function Goals({ onChanged }: { onChanged: () => void }) {
               <GoalCard
                 key={g.id}
                 goal={g}
-                saved={deriveGoalSaved(g.id, transactions, undefined, undefined, accountsById)}
+                saved={deriveGoalSaved(g.id, transactions, undefined, undefined, accountsById, g.linkedSavingsAccountId)}
                 onEdit={() => setEditing(g)}
                 onTogglePaused={() => void togglePaused(g)}
                 onToggleCompleted={() => void toggleCompleted(g)}

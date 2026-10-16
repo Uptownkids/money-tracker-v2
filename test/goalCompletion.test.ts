@@ -14,6 +14,7 @@ import {
   countsTowardCommitment,
   deriveGoalFunded,
   deriveGoalSaved,
+  fundedThisCycle,
   resolvePinnedContribution,
   totalGoalCommitment,
 } from "../src/domain/engine/goals.js";
@@ -260,5 +261,70 @@ describe("goal progress is direction-aware for transfers", () => {
       transferToAccountId: "wf",
     });
     expect(deriveGoalSaved("g-save", [withdrawal])).toBe(20000);
+  });
+});
+
+describe("linked savings pot auto-counts (no tag needed)", () => {
+  const accts = new Map([
+    ["wf", mkAccount({ id: "wf", type: "Checking", countsAsSpendable: true })],
+    ["amex", mkAccount({ id: "amex", type: "Savings", countsAsSpendable: false })],
+  ]);
+  const POT = "amex";
+  const untagged = (o: Record<string, unknown>) =>
+    mkTransaction({
+      type: "Transfer",
+      amount: 100000 as MinorUnits,
+      date: "2026-10-16" as DateOnly,
+      status: "Cleared",
+      goalId: undefined,
+      ...o,
+    });
+
+  it("Malike's $1 test: untagged savings -> checking withdrawal drops the goal to $999", () => {
+    const deposit = untagged({ accountId: "wf", transferToAccountId: "amex" });
+    const withdrawal = untagged({
+      amount: 100 as MinorUnits,
+      accountId: "amex",
+      transferToAccountId: "wf",
+    });
+    expect(
+      deriveGoalSaved("g-save", [deposit, withdrawal], undefined, undefined, accts, POT),
+    ).toBe(99900);
+  });
+
+  it("untagged pot inflows count as funded; outflows never unfund", () => {
+    const deposit = untagged({ accountId: "wf", transferToAccountId: "amex" });
+    const withdrawal = untagged({
+      amount: 100 as MinorUnits,
+      accountId: "amex",
+      transferToAccountId: "wf",
+    });
+    const funded = fundedThisCycle(
+      "g-save",
+      [deposit, withdrawal],
+      "2026-10-15" as DateOnly,
+      "2026-10-29" as DateOnly,
+      accts,
+      undefined,
+      POT,
+    );
+    expect(funded).toBe(100000);
+    expect(
+      deriveGoalFunded("g-save", [deposit, withdrawal], undefined, undefined, POT),
+    ).toBe(100000);
+  });
+
+  it("without a linked pot, untagged transfers stay invisible (legacy)", () => {
+    const deposit = untagged({ accountId: "wf", transferToAccountId: "amex" });
+    expect(deriveGoalSaved("g-save", [deposit], undefined, undefined, accts)).toBe(0);
+    expect(
+      fundedThisCycle(
+        "g-save",
+        [deposit],
+        "2026-10-15" as DateOnly,
+        "2026-10-29" as DateOnly,
+        accts,
+      ),
+    ).toBe(0);
   });
 });

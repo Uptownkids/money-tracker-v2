@@ -42,11 +42,14 @@ function goalTransactionsSorted(
 /**
  * Plain signed sum of a goal's Cleared/Pending transactions.
  * - Expense with goalId: -amount (spending the goal's money).
- * - Transfer with goalId: direction-aware when accounts are provided — a
- *   transfer OUT of savings (non-spendable -> spendable) is a withdrawal
- *   and subtracts; into savings, or a balance-neutral self-transfer,
- *   adds. Without accounts every transfer adds (legacy behavior).
+ * - Transfer with goalId: direction-aware when the pot is known — a
+ *   transfer OUT of the pot subtracts; into the pot (or a
+ *   balance-neutral self-transfer) adds. Without pot/account info every
+ *   transfer adds (legacy behavior).
  * - Income/Refund with goalId: +amount.
+ * When linkedSavingsAccountId is set, the linked account IS the goal's
+ * pot: every transfer touching it counts, tagged or not — deposits add,
+ * withdrawals subtract. (Without the link, only tagged flows count.)
  * Used for progress bars. Optionally cut off at asOfDateExclusive
  * (transactions with date < asOfDateExclusive only).
  */
@@ -56,22 +59,36 @@ export function deriveGoalSaved(
   asOfDateExclusive?: DateOnly,
   toBase: GoalTxToBase = rawTxAmount,
   accountsById?: AccountsById,
+  linkedSavingsAccountId?: string,
 ): MinorUnits {
   let total = 0;
   for (const t of transactions) {
-    if (t.goalId !== goalId || !affectsBalance(t)) continue;
+    const touchesPot =
+      linkedSavingsAccountId !== undefined &&
+      (t.accountId === linkedSavingsAccountId ||
+        t.transferToAccountId === linkedSavingsAccountId);
+    if ((t.goalId !== goalId && !touchesPot) || !affectsBalance(t)) continue;
     if (asOfDateExclusive && compareDateOnly(t.date, asOfDateExclusive) >= 0) continue;
     const amt = toBase(t);
     if (t.type === "Expense") {
       total = total - amt;
-    } else if (
-      t.type === "Transfer" &&
-      accountsById !== undefined &&
-      t.transferToAccountId !== undefined
-    ) {
-      const fromSpendable = isSpendable(accountsById, t.accountId);
-      const toSpendable = isSpendable(accountsById, t.transferToAccountId);
-      total = !fromSpendable && toSpendable ? total - amt : total + amt;
+    } else if (t.type === "Transfer" && t.transferToAccountId !== undefined) {
+      // Withdrawals reduce the goal: out of the pot (the linked savings
+      // account when known, else any non-spendable -> spendable flow).
+      // Everything else adds (deposits, balance-neutral self-transfers).
+      let outOfPot: boolean;
+      if (linkedSavingsAccountId !== undefined) {
+        outOfPot =
+          t.accountId === linkedSavingsAccountId &&
+          t.transferToAccountId !== linkedSavingsAccountId;
+      } else if (accountsById !== undefined) {
+        outOfPot =
+          !isSpendable(accountsById, t.accountId) &&
+          isSpendable(accountsById, t.transferToAccountId);
+      } else {
+        outOfPot = false;
+      }
+      total = outOfPot ? total - amt : total + amt;
     } else {
       total = total + amt;
     }
@@ -121,6 +138,10 @@ export function earmarkedInSpendable(
  * Transfers with this goalId in [cycleStart, cycleEnd] that fund the goal
  * this cycle: spendable -> non-spendable transfers, plus self-transfers
  * within a spendable account (the unlinked-goal funding mechanism).
+ * When linkedSavingsAccountId is set, any transfer INTO the pot counts,
+ * tagged or not — the linked account is the goal. Pot outflows never
+ * reduce funded ("used, not unsaved": spending never increases a future
+ * contribution).
  */
 export function fundedThisCycle(
   goalId: string,
@@ -129,13 +150,22 @@ export function fundedThisCycle(
   cycleEnd: DateOnly,
   accountsById: AccountsById,
   toBase: GoalTxToBase = rawTxAmount,
+  linkedSavingsAccountId?: string,
 ): MinorUnits {
   let total = 0;
   for (const t of transactions) {
-    if (t.goalId !== goalId || t.type !== "Transfer" || !affectsBalance(t)) continue;
+    const intoPot =
+      linkedSavingsAccountId !== undefined &&
+      t.transferToAccountId === linkedSavingsAccountId &&
+      t.accountId !== linkedSavingsAccountId;
+    if ((t.goalId !== goalId && !intoPot) || t.type !== "Transfer" || !affectsBalance(t)) continue;
     if (compareDateOnly(t.date, cycleStart) < 0 || compareDateOnly(t.date, cycleEnd) > 0) continue;
     if (!t.transferToAccountId) continue;
     const amt = toBase(t);
+    if (intoPot) {
+      total += amt;
+      continue;
+    }
     const fromSpendable = isSpendable(accountsById, t.accountId);
     if (!fromSpendable) continue;
     if (isSelfTransfer(t)) {
@@ -186,18 +216,25 @@ export interface PinnedContributionResolution {
 /**
  * Funding a goal has received, ignoring spending. Transfer/Income/Refund
  * with goalId: +amount. Expenses with goalId are "used", not "unsaved":
- * spending the money never increases a future contribution. Used for
- * contribution math; progress bars still use deriveGoalSaved.
+ * spending the money never increases a future contribution. When
+ * linkedSavingsAccountId is set, transfers INTO the pot count too,
+ * tagged or not. Used for contribution math; progress bars still use
+ * deriveGoalSaved.
  */
 export function deriveGoalFunded(
   goalId: string,
   transactions: readonly Transaction[],
   asOfDateExclusive?: DateOnly,
   toBase: GoalTxToBase = rawTxAmount,
+  linkedSavingsAccountId?: string,
 ): MinorUnits {
   let total = 0;
   for (const t of transactions) {
-    if (t.goalId !== goalId || !affectsBalance(t)) continue;
+    const intoPot =
+      linkedSavingsAccountId !== undefined &&
+      t.transferToAccountId === linkedSavingsAccountId &&
+      t.accountId !== linkedSavingsAccountId;
+    if ((t.goalId !== goalId && !intoPot) || !affectsBalance(t)) continue;
     if (t.type === "Expense") continue;
     if (asOfDateExclusive && compareDateOnly(t.date, asOfDateExclusive) >= 0) continue;
     total += toBase(t);
@@ -229,7 +266,7 @@ export function resolvePinnedContribution(
   if (goal.pinnedContribution && goal.pinnedContribution.cycleStart === cycleStart) {
     return { amount: goal.pinnedContribution.amount, shouldPin: false };
   }
-  const fundedAsOfStart = deriveGoalFunded(goal.id, transactions, cycleStart);
+  const fundedAsOfStart = deriveGoalFunded(goal.id, transactions, cycleStart, undefined, goal.linkedSavingsAccountId);
   return {
     amount: computeCycleContribution(goal, fundedAsOfStart, cyclesRemaining),
     shouldPin: true,

@@ -283,7 +283,7 @@ export function PaydayRun({ payDate, paydayRuleId, occurrenceDate, onClose, onCh
         transactions,
         cyclesRemaining,
       );
-      const funded = fundedThisCycle(goal.id, transactions, cycleStart, cycleEnd, accountsById);
+      const funded = fundedThisCycle(goal.id, transactions, cycleStart, cycleEnd, accountsById, undefined, goal.linkedSavingsAccountId);
       return { goal, contribution, funded, remainder: maxZero(subMinor(contribution, funded)) };
     });
   }, [data, accountsById]);
