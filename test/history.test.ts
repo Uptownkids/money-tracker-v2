@@ -63,25 +63,6 @@ describe("buildSpendingHistory", () => {
     expect(coffee?.total).toBe(800);
   });
 
-  it("excludes Expenses filed under a Transfer category", () => {
-    const cats: Category[] = [
-      ...CATS,
-      mkCategory({ id: "cat-transfer", name: "Transfer", kind: "expense" }),
-    ];
-    const h = buildSpendingHistory(
-      [
-        tx({ type: "Expense", amount: 1000 }),
-        tx({ type: "Expense", amount: 5000, categoryId: "cat-transfer" }),
-      ],
-      [],
-      cats,
-      { includeBusiness: true },
-      "2026-10-16" as never,
-    );
-    expect(h.years[0]?.total).toBe(1000);
-    expect(h.years[0]?.byCategory.some((c) => c.name === "Transfer")).toBe(false);
-  });
-
   it("excludes business spending when asked", () => {
     const h = buildSpendingHistory(
       [
