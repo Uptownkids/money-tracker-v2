@@ -27,6 +27,7 @@ import { parseDollarsToMinor } from "../app/quickLog.js";
 import { formatMoney } from "../app/format.js";
 import { decimalsOf } from "../domain/money/currency.js";
 import { todayLocal } from "../domain/dates/dateOnly.js";
+import { CsvImportSection } from "./CsvImport.js";
 import {
   getInboxToken,
   getInboxTokenExpiry,
@@ -681,6 +682,13 @@ export function SettingsSheet({
                 {importState.stage === "failed" && (
                   <p className="text-sm text-red-700 dark:text-red-300">{importState.message}</p>
                 )}
+              </Section>
+
+              <Section
+                title="Bank import"
+                blurb="Import Wells Fargo CSV exports. Files never leave this device; every import is one batch you can roll back."
+              >
+                <CsvImportSection />
               </Section>
 
               <Section

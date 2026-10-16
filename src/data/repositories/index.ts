@@ -9,6 +9,9 @@ import type { RecurringOverride, RecurringRule } from "../../domain/entities/rec
 import type { Split } from "../../domain/entities/split.js";
 import type { DailySnapshot, PaydayRunState, Settings } from "../../domain/entities/settings.js";
 import type { SnoozedMove } from "../../domain/entities/snoozedMove.js";
+import type { ImportBatch } from "../../domain/entities/importBatch.js";
+import type { BankFingerprint } from "../../domain/entities/bankFingerprint.js";
+import type { BankAccountMap } from "../../domain/entities/bankAccountMap.js";
 import type { DateOnly } from "../../domain/dates/dateOnly.js";
 import { countsTowardCommitment } from "../../domain/engine/goals.js";
 
@@ -44,6 +47,16 @@ export class TransactionRepository extends Repository<Transaction> {
 
   byGoal(goalId: string): Promise<Transaction[]> {
     return this.table.where("goalId").equals(goalId).toArray();
+  }
+
+  /** Every transaction created by one import batch (for rollback). */
+  byImportBatch(batchId: string): Promise<Transaction[]> {
+    return this.table.where("importBatchId").equals(batchId).toArray();
+  }
+
+  async deleteMany(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.table.where("id").anyOf([...ids]).delete();
   }
 }
 
@@ -141,6 +154,57 @@ export class SnoozedMoveRepository {
   }
 }
 
+export class BankFingerprintRepository {
+  private table: MoneyTrackerDB["bankFingerprints"];
+
+  constructor(table: MoneyTrackerDB["bankFingerprints"]) {
+    this.table = table;
+  }
+
+  get(fingerprint: string): Promise<BankFingerprint | undefined> {
+    return this.table.get(fingerprint);
+  }
+
+  getAll(): Promise<BankFingerprint[]> {
+    return this.table.toArray();
+  }
+
+  async getMany(fingerprints: readonly string[]): Promise<Map<string, BankFingerprint>> {
+    const rows = await this.table.where("fingerprint").anyOf([...fingerprints]).toArray();
+    return new Map(rows.map((r) => [r.fingerprint, r]));
+  }
+
+  /** How many rows already exist per fingerprint (count-based dedup). */
+  async countByFingerprints(fingerprints: readonly string[]): Promise<Map<string, number>> {
+    const rows = await this.table.where("fingerprint").anyOf([...fingerprints]).toArray();
+    const counts = new Map<string, number>();
+    for (const r of rows) counts.set(r.fingerprint, (counts.get(r.fingerprint) ?? 0) + 1);
+    return counts;
+  }
+
+  putMany(rows: BankFingerprint[]): Promise<void> {
+    return this.table.bulkPut(rows).then(() => undefined);
+  }
+
+  byBatch(batchId: string): Promise<BankFingerprint[]> {
+    return this.table.where("batchId").equals(batchId).toArray();
+  }
+
+  async deleteByBatch(batchId: string): Promise<void> {
+    await this.table.where("batchId").equals(batchId).delete();
+  }
+
+  /** Forget every fingerprint pointing at a deleted transaction. */
+  async deleteByTransactionIds(transactionIds: readonly string[]): Promise<void> {
+    if (transactionIds.length === 0) return;
+    await this.table.where("transactionId").anyOf([...transactionIds]).delete();
+  }
+
+  clear(): Promise<void> {
+    return this.table.clear();
+  }
+}
+
 export interface Repositories {
   accounts: AccountRepository;
   categories: CategoryRepository;
@@ -153,6 +217,9 @@ export interface Repositories {
   paydayRuns: PaydayRunRepository;
   dailySnapshots: DailySnapshotRepository;
   snoozedMoves: SnoozedMoveRepository;
+  importBatches: Repository<ImportBatch>;
+  bankFingerprints: BankFingerprintRepository;
+  bankAccountMaps: Repository<BankAccountMap>;
 }
 
 /** Build all repositories bound to one database instance. */
@@ -169,5 +236,8 @@ export function createRepositories(db: MoneyTrackerDB): Repositories {
     paydayRuns: new PaydayRunRepository(db.paydayRuns),
     dailySnapshots: new DailySnapshotRepository(db.dailySnapshots),
     snoozedMoves: new SnoozedMoveRepository(db.snoozedMoves),
+    importBatches: new Repository<ImportBatch>(db.importBatches),
+    bankFingerprints: new BankFingerprintRepository(db.bankFingerprints),
+    bankAccountMaps: new Repository<BankAccountMap>(db.bankAccountMaps),
   };
 }

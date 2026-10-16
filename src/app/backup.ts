@@ -13,6 +13,9 @@ import type { RecurringOverride, RecurringRule } from "../domain/entities/recurr
 import type { Split } from "../domain/entities/split.js";
 import type { DailySnapshot, PaydayRunState, Settings } from "../domain/entities/settings.js";
 import type { SnoozedMove } from "../domain/entities/snoozedMove.js";
+import type { ImportBatch } from "../domain/entities/importBatch.js";
+import type { BankFingerprint } from "../domain/entities/bankFingerprint.js";
+import type { BankAccountMap } from "../domain/entities/bankAccountMap.js";
 import { decimalsOf } from "../domain/money/currency.js";
 
 export const BACKUP_VERSION = 1;
@@ -31,6 +34,10 @@ export interface BackupTables {
   paydayRuns: PaydayRunState[];
   dailySnapshots: DailySnapshot[];
   snoozedMoves: SnoozedMove[];
+  /** Optional: absent in backups written before bank import existed. */
+  importBatches?: ImportBatch[];
+  bankFingerprints?: BankFingerprint[];
+  bankAccountMaps?: BankAccountMap[];
 }
 
 export interface BackupData {
@@ -94,6 +101,9 @@ export async function exportAll(repos: Repositories): Promise<BackupData> {
     paydayRuns: await repos.paydayRuns.getAll(),
     dailySnapshots: await repos.dailySnapshots.getAll(),
     snoozedMoves: await repos.snoozedMoves.getAll(),
+    importBatches: await repos.importBatches.getAll(),
+    bankFingerprints: await repos.bankFingerprints.getAll(),
+    bankAccountMaps: await repos.bankAccountMaps.getAll(),
   };
   return { version: BACKUP_VERSION, exportedAt: nowIso, tables };
 }
@@ -289,6 +299,28 @@ export function validateBackup(json: unknown): BackupValidation {
     };
   }
   if (errors.length > 0) return { ok: false, errors };
+
+  // Optional bank-import tables (absent in backups written before the
+  // feature existed). Validated lightly when present.
+  const optionalTables: Record<string, string> = {
+    importBatches: "id",
+    bankFingerprints: "fingerprint",
+    bankAccountMaps: "id",
+  };
+  for (const [name, idField] of Object.entries(optionalTables)) {
+    const rows = tableObj[name];
+    if (rows === undefined) continue;
+    if (!Array.isArray(rows)) {
+      return fail(`The "${name}" table must be a list of rows.`);
+    }
+    for (let i = 0; i < rows.length && errors.length < MAX_ERRORS; i++) {
+      const row = rows[i] as Record<string, unknown>;
+      if (typeof row !== "object" || row === null || typeof row[idField] !== "string") {
+        errors.push(`The "${name}" table has a row at position ${i} with a missing "${idField}".`);
+      }
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
   return { ok: true, data: json as BackupData };
 }
 
@@ -311,6 +343,9 @@ export async function importAll(repos: Repositories, data: BackupData): Promise<
     repos.paydayRuns.clear(),
     repos.dailySnapshots.clear(),
     repos.snoozedMoves.clear(),
+    repos.importBatches.clear(),
+    repos.bankFingerprints.clear(),
+    repos.bankAccountMaps.clear(),
   ]);
   await Promise.all([
     repos.accounts.putMany(t.accounts),
@@ -324,6 +359,9 @@ export async function importAll(repos: Repositories, data: BackupData): Promise<
     repos.paydayRuns.putMany(t.paydayRuns),
     repos.dailySnapshots.putMany(t.dailySnapshots),
     repos.snoozedMoves.putMany(t.snoozedMoves),
+    repos.importBatches.putMany(t.importBatches ?? []),
+    repos.bankFingerprints.putMany(t.bankFingerprints ?? []),
+    repos.bankAccountMaps.putMany(t.bankAccountMaps ?? []),
   ]);
 }
 
