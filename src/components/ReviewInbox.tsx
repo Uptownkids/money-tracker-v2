@@ -12,12 +12,16 @@ import type { RecurringRule } from "../domain/entities/recurringRule.js";
 import type { ReviewItem, ReviewReason } from "../domain/entities/reviewItem.js";
 import type { Transaction } from "../domain/entities/transaction.js";
 import {
+  applyPriceIncrease,
+  confirmRecurringSuggestion,
   confirmReviewItem,
   confirmTransferPair,
   ignoreReviewItem,
   linkBillReviewItem,
   markTransferReviewItem,
   recategorizeReviewItem,
+  resolveMissedCharge,
+  resolveResurrected,
 } from "../app/reviewActions.js";
 import { EXTERNAL_ACCOUNT_ID } from "../domain/import/selfTransfers.js";
 import { TransactionEditSheet } from "./TransactionEditSheet.js";
@@ -40,6 +44,9 @@ const REASON_LABEL: Record<ReviewReason, string> = {
   "transfer-unknown-account": "Other account unclear",
   "weak-recurring": "Possible subscription",
   "refund-unknown-category": "Refund needs its category",
+  "price-increase": "Price went up",
+  "missed-charge": "Charge missing — possibly cancelled",
+  "resurrected-merchant": "Charged again after ending",
 };
 
 function money(t: Transaction): string {
@@ -117,6 +124,9 @@ export function ReviewInboxSheet({
 
   const guessLine = (d: ItemData): string => {
     const g = d.item.guess;
+    if (g.billName && d.item.reasons.some((r) => r !== "uncategorized" && r !== "ambiguous-match")) {
+      return g.billName;
+    }
     const cat = g.categoryId ? categories.find((c) => c.id === g.categoryId)?.name : null;
     const dest = g.transferToAccountId
       ? accounts.find((a) => a.id === g.transferToAccountId)?.name
@@ -151,6 +161,11 @@ export function ReviewInboxSheet({
           {items.map((d) => {
             const busy = workingId === d.item.id;
             const isTransfer = d.item.reasons.includes("transfer-unconfirmed");
+            const isRecurring =
+              d.item.reasons.includes("weak-recurring") ||
+              d.item.reasons.includes("price-increase") ||
+              d.item.reasons.includes("missed-charge") ||
+              d.item.reasons.includes("resurrected-merchant");
             return (
               <li
                 key={d.item.id}
@@ -190,7 +205,9 @@ export function ReviewInboxSheet({
                 </label>
 
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {isTransfer ? (
+                  {isRecurring ? (
+                    <RecurringActions item={d.item} tx={d.tx} busy={busy} run={run} />
+                  ) : isTransfer ? (
                     <>
                       <button
                         type="button"
@@ -374,4 +391,68 @@ export function ReviewInboxSheet({
       </div>
     </div>
   );
+}
+
+/** One-tap actions for bill/subscription change flags (Phase B2). */
+function RecurringActions({
+  item,
+  busy,
+  run,
+}: {
+  item: ReviewItem;
+  tx: Transaction;
+  busy: boolean;
+  run: (id: string, fn: () => Promise<void>) => Promise<void>;
+}) {
+  const reasons = item.reasons;
+  const btn = (label: string, primary: boolean, fn: () => Promise<void>) => (
+    <button
+      key={label}
+      type="button"
+      disabled={busy}
+      className={primary ? primaryPillCls : pillCls}
+      onClick={() => void run(item.id, fn)}
+    >
+      {label}
+    </button>
+  );
+  const ignore = btn("Ignore", false, () => ignoreReviewItem(repos(), item.id));
+
+  if (reasons.includes("weak-recurring")) {
+    return (
+      <>
+        {btn("Track it", true, async () => {
+          await confirmRecurringSuggestion(repos(), item.id);
+        })}
+        {ignore}
+      </>
+    );
+  }
+  if (reasons.includes("price-increase")) {
+    return (
+      <>
+        {btn("Update bill", true, () => applyPriceIncrease(repos(), item.id))}
+        {ignore}
+      </>
+    );
+  }
+  if (reasons.includes("missed-charge")) {
+    return (
+      <>
+        {btn("Keep ended", true, () => resolveMissedCharge(repos(), item.id, false))}
+        {btn("Still active", false, () => resolveMissedCharge(repos(), item.id, true))}
+        {ignore}
+      </>
+    );
+  }
+  if (reasons.includes("resurrected-merchant")) {
+    return (
+      <>
+        {btn("Track again", true, () => resolveResurrected(repos(), item.id, true))}
+        {btn("Keep ended", false, () => resolveResurrected(repos(), item.id, false))}
+        {ignore}
+      </>
+    );
+  }
+  return <>{ignore}</>;
 }

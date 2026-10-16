@@ -17,6 +17,7 @@ import {
   type CommitSummary,
   type ImportPlan,
 } from "../app/importEngine.js";
+import { undoRecurringRule } from "../app/recurringDetect.js";
 import { rollbackImportBatch, suggestBankKey, type CsvFileInput } from "../app/csvImport.js";
 import { DEFAULT_SELF_NAME_VARIATIONS } from "../domain/import/selfTransfers.js";
 
@@ -185,6 +186,26 @@ export function CsvImportSection() {
     }
   }, [plan, toInputs, statements, load]);
 
+  const doUndoRecurring = useCallback(
+    async (ruleId: string) => {
+      setError(null);
+      setWorking(true);
+      try {
+        const { untagged } = await undoRecurringRule(repos(), ruleId);
+        setSummary((s) =>
+          s ? { ...s, recurring: { ...s.recurring, created: s.recurring.created.filter((c) => c.ruleId !== ruleId) } } : s,
+        );
+        setDoneMsg(`Undone — rule removed, ${untagged} past charges untagged. Transactions kept.`);
+        await load();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Undo failed.");
+      } finally {
+        setWorking(false);
+      }
+    },
+    [load],
+  );
+
   const doRollback = useCallback(
     async (batchId: string) => {
       setError(null);
@@ -312,6 +333,16 @@ export function CsvImportSection() {
             {plan.summary.newRows} new · {plan.summary.matched} matched to your entries ·{" "}
             {plan.summary.billSettled} bills settled · {plan.summary.transfersNew} transfers ·{" "}
             {plan.summary.duplicates} duplicates skipped · {plan.summary.needsReview} need review
+            {(plan.recurringPreview.wouldCreate > 0 || plan.recurringPreview.wouldSuggest > 0) && (
+              <>
+                {" · "}
+                {plan.recurringPreview.wouldCreate > 0 &&
+                  `${plan.recurringPreview.wouldCreate} new bill${plan.recurringPreview.wouldCreate === 1 ? "" : "s"} detected`}
+                {plan.recurringPreview.wouldCreate > 0 && plan.recurringPreview.wouldSuggest > 0 && ", "}
+                {plan.recurringPreview.wouldSuggest > 0 &&
+                  `${plan.recurringPreview.wouldSuggest} possible subscription${plan.recurringPreview.wouldSuggest === 1 ? "" : "s"}`}
+              </>
+            )}
           </p>
           {plan.preview.files.map((f) => (
             <div key={f.fileName} className="mt-2 text-xs text-stone-500 dark:text-stone-400">
@@ -393,6 +424,26 @@ export function CsvImportSection() {
             {summary.imported + summary.transfersNew} imported · {summary.matched} matched ·{" "}
             {summary.billSettled} bills settled · {summary.needsReview} need review
           </p>
+          {summary.recurring.created.length > 0 && (
+            <ul className="mt-2 space-y-1.5">
+              {summary.recurring.created.map((c) => (
+                <li
+                  key={c.ruleId}
+                  className="flex items-center justify-between gap-2 text-sm text-emerald-800 dark:text-emerald-200"
+                >
+                  <span>{c.message}</span>
+                  <button
+                    type="button"
+                    className={secondaryBtnCls}
+                    disabled={working}
+                    onClick={() => void doUndoRecurring(c.ruleId)}
+                  >
+                    Undo
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           {summary.reconciliation.some((r) => r.diff !== undefined) && (
             <ul className="mt-2 space-y-1 text-sm">
               {summary.reconciliation

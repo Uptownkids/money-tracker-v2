@@ -7,6 +7,11 @@ import type { Repositories } from "../data/repositories/index.js";
 import type { Transaction } from "../domain/entities/transaction.js";
 import type { MerchantRule } from "../domain/entities/merchantRule.js";
 import { EXTERNAL_ACCOUNT_ID } from "../domain/import/selfTransfers.js";
+import {
+  applyRecurringPriceChange,
+  createRuleForMerchant,
+  reactivateRecurringRule,
+} from "./recurringDetect.js";
 
 function repos_now(): string {
   return new Date().toISOString();
@@ -201,6 +206,15 @@ export async function ignoreReviewItem(repos: Repositories, itemId: string): Pro
   if (!item) throw new Error(`ignoreReviewItem: unknown item "${itemId}"`);
   if (item.status !== "open") throw new Error("ignoreReviewItem: item is not open");
   await repos.reviewItems.put({ ...item, status: "ignored", resolvedAt: repos_now() });
+  // Ignoring a recurring suggestion means "don't ask again for this merchant".
+  if (item.reasons.includes("weak-recurring")) {
+    const s = await repos.settings.get();
+    if (s) {
+      const dismissed = new Set(s.recurringDismissed ?? []);
+      dismissed.add(item.merchantKey);
+      await repos.settings.save({ ...s, recurringDismissed: [...dismissed] });
+    }
+  }
 }
 
 /**
@@ -218,6 +232,73 @@ export async function confirmTransferPair(
   }
   if (always) {
     await rememberTransferPair(repos, tx.accountId, tx.transferToAccountId);
+  }
+  await resolveItem(repos, itemId);
+}
+
+// --- Phase B2: recurring review actions ---
+
+/**
+ * Confirm a weak-recurring suggestion: create the rule now (tags past
+ * charges) and resolve the suggestion.
+ */
+export async function confirmRecurringSuggestion(
+  repos: Repositories,
+  itemId: string,
+): Promise<string | null> {
+  const { item } = await getItem(repos, itemId);
+  const info = await createRuleForMerchant(repos, item.merchantKey);
+  await resolveItem(repos, itemId);
+  return info ? info.message : null;
+}
+
+/** Accept a price increase: update the rule to the new amount. */
+export async function applyPriceIncrease(repos: Repositories, itemId: string): Promise<void> {
+  const { item, tx } = await getItem(repos, itemId);
+  const rule = (await repos.recurringRules.getAll()).find(
+    (r) => r.merchantKey === item.merchantKey && r.autoCreated,
+  );
+  if (!rule) throw new Error("applyPriceIncrease: no auto-created rule for this merchant");
+  await applyRecurringPriceChange(repos, rule.id, tx.amount);
+  await resolveItem(repos, itemId);
+}
+
+/**
+ * Resolve a missed-charge flag. `reactivate=true` means "it's still
+ * active" — the rule is turned back on.
+ */
+export async function resolveMissedCharge(
+  repos: Repositories,
+  itemId: string,
+  reactivate: boolean,
+): Promise<void> {
+  const { item } = await getItem(repos, itemId);
+  if (reactivate) {
+    const rule = (await repos.recurringRules.getAll()).find(
+      (r) => r.merchantKey === item.merchantKey && r.autoCreated,
+    );
+    if (rule) await reactivateRecurringRule(repos, rule.id);
+  }
+  await resolveItem(repos, itemId);
+}
+
+/**
+ * Resolve a resurrected-merchant flag. `reactivate=true` turns the ended
+ * rule back on and tags the new charge with it.
+ */
+export async function resolveResurrected(
+  repos: Repositories,
+  itemId: string,
+  reactivate: boolean,
+): Promise<void> {
+  const { item, tx } = await getItem(repos, itemId);
+  if (reactivate) {
+    const rule = (await repos.recurringRules.getAll()).find(
+      (r) => r.merchantKey === item.merchantKey && r.autoCreated,
+    );
+    if (!rule) throw new Error("resolveResurrected: no auto-created rule for this merchant");
+    await reactivateRecurringRule(repos, rule.id);
+    await repos.transactions.put({ ...tx, recurringRuleId: rule.id, updatedAt: repos_now() });
   }
   await resolveItem(repos, itemId);
 }

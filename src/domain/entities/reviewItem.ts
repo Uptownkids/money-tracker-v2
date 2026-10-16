@@ -10,7 +10,10 @@ export type ReviewReason =
   | "transfer-unconfirmed" // self-transfer for an unconfirmed account pair
   | "transfer-unknown-account" // transfer-like, other account not identified
   | "weak-recurring" // possible subscription/bill pattern, not clear enough
-  | "refund-unknown-category"; // refund with no known original category
+  | "refund-unknown-category" // refund with no known original category
+  | "price-increase" // recurring charge cost more than the rule amount
+  | "missed-charge" // expected recurring charge never arrived (possibly cancelled)
+  | "resurrected-merchant"; // new charge from a previously ended merchant
 
 export interface ReviewGuess {
   type: "Expense" | "Income" | "Transfer" | "Refund";

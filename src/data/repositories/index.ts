@@ -47,6 +47,11 @@ export class TransactionRepository extends Repository<Transaction> {
     return this.table.where("[recurringRuleId+occurrenceDate]").equals([ruleId, occurrenceDate]).first();
   }
 
+  /** Every transaction tagged to one recurring rule. */
+  byRecurringRule(ruleId: string): Promise<Transaction[]> {
+    return this.table.where("recurringRuleId").equals(ruleId).toArray();
+  }
+
   byGoal(goalId: string): Promise<Transaction[]> {
     return this.table.where("goalId").equals(goalId).toArray();
   }

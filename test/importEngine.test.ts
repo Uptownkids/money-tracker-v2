@@ -370,3 +370,49 @@ describe("importEngine transfer confirmation", () => {
     expect(tx).toMatchObject({ type: "Transfer", transferToAccountId: "external", categoryId: null });
   });
 });
+
+describe("importEngine recurring detection (B2)", () => {
+  let db3: MoneyTrackerDB;
+  let repos3: Repositories;
+
+  afterEach(async () => {
+    await db3?.delete();
+  });
+
+  async function setup3() {
+    db3 = new MoneyTrackerDB(`test-eng3-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    repos3 = createRepositories(db3);
+    await repos3.accounts.put(mkAccount({ id: "acct-checking", name: "Checking", type: "Checking" }));
+    await repos3.categories.put(mkCategory({ id: "cat-music", name: "Music", kind: "expense" }));
+    await repos3.categories.put(mkCategory({ id: "cat-other", name: "Other", kind: "expense" }));
+    await repos3.categories.put(mkCategory({ id: "cat-income", name: "Income", kind: "income" }));
+    await repos3.settings.save({
+      id: "settings",
+      baseCurrency: "USD",
+      bufferAmount: 0,
+      theme: "system",
+      notificationsEnabled: false,
+      onboardingCompleted: true,
+    } as never);
+  }
+
+  it("auto-creates a subscription rule from imported history", async () => {
+    await setup3();
+    const text = ["Date,Amount,*,*,Description",
+      '08/15/2026,-12.99,,,"RECURRING PAYMENT AUTHORIZED ON 08/14 SPOTIFY USA"',
+      '09/15/2026,-12.99,,,"RECURRING PAYMENT AUTHORIZED ON 09/14 SPOTIFY USA"',
+      '10/15/2026,-12.99,,,"RECURRING PAYMENT AUTHORIZED ON 10/14 SPOTIFY USA"',
+    ].join("\n");
+    const f: CsvFileInput = { fileName: "a.csv", text, bankKey: "a", appAccountId: "acct-checking" };
+    const plan = await planImport(repos3, [f]);
+    const summary = await commitImport(repos3, plan, [f]);
+    expect(summary.recurring.created).toHaveLength(1);
+    expect(summary.recurring.created[0]?.message).toContain("Now tracking Spotify, $12.99 monthly");
+    const rules = await repos3.recurringRules.getAll();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.kind).toBe("Subscription");
+    // Past charges tagged.
+    const tagged = await repos3.transactions.byRecurringRule(rules[0]!.id);
+    expect(tagged).toHaveLength(3);
+  });
+});

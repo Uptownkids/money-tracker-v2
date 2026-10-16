@@ -19,11 +19,13 @@ import {
   type MatchContext,
   type RowDecision,
 } from "../domain/import/matching.js";
+import { previewCsvImport, type CsvFileInput, type ImportPreview } from "./csvImport.js";
 import {
-  previewCsvImport,
-  type CsvFileInput,
-  type ImportPreview,
-} from "./csvImport.js";
+  detectAndCreateRules,
+  previewRecurringDetection,
+  type CreatedRuleInfo,
+  type DetectionOutcome,
+} from "./recurringDetect.js";
 import type { ImportBatch } from "../domain/entities/importBatch.js";
 
 export interface PlannedDecision {
@@ -43,6 +45,8 @@ export interface ImportPlan {
     transfersAbsorbed: number;
     needsReview: number;
   };
+  /** Bills/subscriptions the commit would auto-detect (dry run). */
+  recurringPreview: { wouldCreate: number; wouldSuggest: number };
 }
 
 async function buildContext(repos: Repositories): Promise<MatchContext> {
@@ -118,7 +122,9 @@ export async function planImport(
     }
   });
 
-  return { preview, decisions, summary };
+  const recurringPreview = await previewRecurringDetection(repos);
+
+  return { preview, decisions, summary, recurringPreview };
 }
 
 export interface ReconciliationRow {
@@ -140,6 +146,8 @@ export interface CommitSummary {
   transfersAbsorbed: number;
   needsReview: number;
   reviewItemIds: string[];
+  /** Bills/subscriptions auto-detected by this import (Phase B2). */
+  recurring: DetectionOutcome;
   reconciliation: ReconciliationRow[];
 }
 
@@ -376,6 +384,7 @@ export async function commitImport(
       transfersAbsorbed: 0,
       needsReview: 0,
       reviewItemIds: [],
+      recurring: { created: [], suggested: 0, flagged: 0 },
       reconciliation: [],
     };
   }
@@ -435,10 +444,15 @@ export async function commitImport(
       };
     });
 
+  // Phase B2: detect recurring bills/subscriptions from the new rows.
+  // This runs after the rows exist so tagging can find them.
+  const recurring = await detectAndCreateRules(repos, newTransactions);
+
   return {
     batch,
     ...summary,
     reviewItemIds: reviewItems.map((r) => r.id),
+    recurring,
     reconciliation,
   };
 }

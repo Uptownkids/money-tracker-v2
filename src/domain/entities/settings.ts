@@ -46,6 +46,12 @@ export interface Settings {
    * best guess; after one confirmation the pair is handled automatically.
    */
   confirmedTransferPairs?: string[];
+  /**
+   * Merchant keys the user dismissed for auto recurring detection
+   * (via undo or ignoring a suggestion). The detector never auto-creates
+   * for these again.
+   */
+  recurringDismissed?: string[];
 }
 
 // Start-of-day safe-to-spend snapshot. Written once when the day's number
