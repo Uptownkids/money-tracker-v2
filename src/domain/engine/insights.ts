@@ -26,7 +26,7 @@ import type { Split } from "../entities/split.js";
 import type { Transaction } from "../entities/transaction.js";
 import { affectsBalance, countsAsIncome } from "../entities/transaction.js";
 import { computeTodaySpending, type TransactionToBase } from "./safeToSpend.js";
-import { deriveGoalSaved } from "./goals.js";
+import { deriveGoalSaved, type AccountsById } from "./goals.js";
 import { annualCost } from "./recurringEngine.js";
 
 /** Raw amount converter: fx.baseAmount when frozen FX is present, else amount. */
@@ -292,9 +292,10 @@ export function goalProgress(
   goals: readonly Goal[],
   transactions: readonly Transaction[],
   toBase: TransactionToBase = rawTxAmount,
+  accountsById?: AccountsById,
 ): GoalProgress[] {
   return goals.map((goal) => {
-    const saved = deriveGoalSaved(goal.id, transactions, undefined, toBase);
+    const saved = deriveGoalSaved(goal.id, transactions, undefined, toBase, accountsById);
     const pct =
       goal.targetAmount > 0
         ? Math.min(100, Math.max(0, (saved / goal.targetAmount) * 100))

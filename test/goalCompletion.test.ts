@@ -21,7 +21,7 @@ import {
   rankTodaysMoves,
   type MovesContext,
 } from "../src/domain/engine/todaysMoves.js";
-import { mkGoal, mkTransaction } from "./helpers.js";
+import { mkAccount, mkGoal, mkTransaction } from "./helpers.js";
 import type { Goal } from "../src/domain/entities/goal.js";
 import type { MinorUnits } from "../src/domain/money/money.js";
 import type { DateOnly } from "../src/domain/dates/dateOnly.js";
@@ -216,5 +216,49 @@ describe("linking a transfer to a goal", () => {
     // Linked (what the picker writes): progress jumps to $1,000.
     const linked = { ...move, goalId: "g-save" };
     expect(deriveGoalSaved("g-save", [linked])).toBe(100000);
+  });
+});
+
+describe("goal progress is direction-aware for transfers", () => {
+  const accts = new Map([
+    ["wf", mkAccount({ id: "wf", type: "Checking", countsAsSpendable: true })],
+    ["amex", mkAccount({ id: "amex", type: "Savings", countsAsSpendable: false })],
+  ]);
+  const tagged = (o: Record<string, unknown>) =>
+    mkTransaction({
+      type: "Transfer",
+      amount: 100000 as MinorUnits,
+      date: "2026-10-16" as DateOnly,
+      status: "Cleared",
+      goalId: "g-save",
+      ...o,
+    });
+
+  it("a tagged withdrawal (savings -> checking) reduces the goal", () => {
+    // Malike's Oct 16 test: pulling money back out of savings must move
+    // the tracker down, not up and not nowhere.
+    const deposit = tagged({ accountId: "wf", transferToAccountId: "amex" });
+    const withdrawal = tagged({
+      amount: 20000 as MinorUnits,
+      accountId: "amex",
+      transferToAccountId: "wf",
+    });
+    expect(deriveGoalSaved("g-save", [deposit, withdrawal], undefined, undefined, accts)).toBe(80000);
+  });
+
+  it("deposits and balance-neutral self-transfers still add", () => {
+    const deposit = tagged({ accountId: "wf", transferToAccountId: "amex" });
+    const selfTransfer = tagged({ accountId: "wf", transferToAccountId: "wf" });
+    expect(deriveGoalSaved("g-save", [deposit], undefined, undefined, accts)).toBe(100000);
+    expect(deriveGoalSaved("g-save", [selfTransfer], undefined, undefined, accts)).toBe(100000);
+  });
+
+  it("without accounts every tagged transfer still adds (legacy behavior)", () => {
+    const withdrawal = tagged({
+      amount: 20000 as MinorUnits,
+      accountId: "amex",
+      transferToAccountId: "wf",
+    });
+    expect(deriveGoalSaved("g-save", [withdrawal])).toBe(20000);
   });
 });

@@ -41,8 +41,12 @@ function goalTransactionsSorted(
 
 /**
  * Plain signed sum of a goal's Cleared/Pending transactions.
- * Transfer with goalId: +amount (allocation to the goal).
- * Expense with goalId: -amount. Income/Refund with goalId: +amount.
+ * - Expense with goalId: -amount (spending the goal's money).
+ * - Transfer with goalId: direction-aware when accounts are provided — a
+ *   transfer OUT of savings (non-spendable -> spendable) is a withdrawal
+ *   and subtracts; into savings, or a balance-neutral self-transfer,
+ *   adds. Without accounts every transfer adds (legacy behavior).
+ * - Income/Refund with goalId: +amount.
  * Used for progress bars. Optionally cut off at asOfDateExclusive
  * (transactions with date < asOfDateExclusive only).
  */
@@ -51,13 +55,26 @@ export function deriveGoalSaved(
   transactions: readonly Transaction[],
   asOfDateExclusive?: DateOnly,
   toBase: GoalTxToBase = rawTxAmount,
+  accountsById?: AccountsById,
 ): MinorUnits {
   let total = 0;
   for (const t of transactions) {
     if (t.goalId !== goalId || !affectsBalance(t)) continue;
     if (asOfDateExclusive && compareDateOnly(t.date, asOfDateExclusive) >= 0) continue;
     const amt = toBase(t);
-    total = t.type === "Expense" ? total - amt : total + amt;
+    if (t.type === "Expense") {
+      total = total - amt;
+    } else if (
+      t.type === "Transfer" &&
+      accountsById !== undefined &&
+      t.transferToAccountId !== undefined
+    ) {
+      const fromSpendable = isSpendable(accountsById, t.accountId);
+      const toSpendable = isSpendable(accountsById, t.transferToAccountId);
+      total = !fromSpendable && toSpendable ? total - amt : total + amt;
+    } else {
+      total = total + amt;
+    }
   }
   return total;
 }

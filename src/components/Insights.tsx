@@ -209,7 +209,7 @@ export function Insights() {
       worth: netWorth(balances),
       runway: runway(accounts, balances, transactions, today, toBase, balanceToBase),
       history: spendingHistory(snapshots, transactions, toBase, baseCurrency),
-      goals: goalProgress(goals, transactions, toBase),
+      goals: goalProgress(goals, transactions, toBase, new Map(accounts.map((a) => [a.id, a]))),
       ious: outstandingIous(splits, (amt, cur) => convertToBase(amt, cur)),
       subs: subscriptionTotals(rules, overrides, today),
     };

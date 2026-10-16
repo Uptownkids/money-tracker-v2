@@ -458,6 +458,7 @@ export function Goals({ onChanged }: { onChanged: () => void }) {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [savingsAccounts, setSavingsAccounts] = useState<Account[]>([]);
+  const [accountsById, setAccountsById] = useState<Map<string, Account>>(new Map());
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Goal | null>(null);
@@ -472,6 +473,7 @@ export function Goals({ onChanged }: { onChanged: () => void }) {
     setGoals(gs);
     setTransactions(txs);
     setSavingsAccounts(accts.filter((a) => a.type === "Savings" && !a.archived));
+    setAccountsById(new Map(accts.map((a) => [a.id, a])));
     setLoading(false);
   }, []);
 
@@ -554,7 +556,7 @@ export function Goals({ onChanged }: { onChanged: () => void }) {
               <GoalCard
                 key={g.id}
                 goal={g}
-                saved={deriveGoalSaved(g.id, transactions)}
+                saved={deriveGoalSaved(g.id, transactions, undefined, undefined, accountsById)}
                 onEdit={() => setEditing(g)}
                 onTogglePaused={() => void togglePaused(g)}
                 onToggleCompleted={() => void toggleCompleted(g)}
