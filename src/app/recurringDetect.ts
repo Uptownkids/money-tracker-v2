@@ -141,9 +141,11 @@ async function dismissMerchant(repos: Repositories, merchantKey: string): Promis
 }
 
 /**
- * Latest transaction date in an account's imported data. Missed-charge
- * checks measure against this — never against today — so importing an
- * older or stale CSV can never end an active rule.
+ * Latest BANK-IMPORTED transaction date in an account's data. Only rows
+ * with an importBatchId count — manually logged and Quick-Log entries are
+ * the user's own bookkeeping, not the bank's record of what happened.
+ * Missed-charge checks measure against this — never against today — so
+ * importing an older or stale CSV can never end an active rule.
  */
 async function latestDataDate(
   repos: Repositories,
@@ -153,6 +155,7 @@ async function latestDataDate(
   const txs = await repos.transactions.byAccount(accountId);
   let latest: DateOnly | null = null;
   for (const t of txs) {
+    if (!t.importBatchId) continue;
     if (t.status !== "Cleared" && t.status !== "Pending") continue;
     if (latest === null || compareDateOnly(t.date, latest) > 0) latest = t.date;
   }

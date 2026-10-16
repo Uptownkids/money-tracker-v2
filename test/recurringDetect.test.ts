@@ -50,6 +50,28 @@ describe("recurringDetect", () => {
     );
   }
 
+  async function addImportedCharge(
+    id: string,
+    date: string,
+    amount: number,
+    payee: string,
+    batchId: string,
+    categoryId = "cat-music",
+  ) {
+    await repos.transactions.put(
+      mkTransaction({
+        id,
+        accountId: "acct-checking",
+        date: date as never,
+        amount,
+        payee,
+        categoryId,
+        status: "Cleared",
+        importBatchId: batchId,
+      }),
+    );
+  }
+
   it("auto-creates a subscription rule and tags past charges", async () => {
     await setup();
     await addCharge("s1", "2026-07-15", 1299, "Spotify");
@@ -265,6 +287,51 @@ describe("recurringDetect", () => {
     // No "possibly cancelled" review item.
     const reviews = await repos.reviewItems.open();
     expect(reviews.some((r) => r.reasons.includes("missed-charge"))).toBe(false);
+  });
+
+  it("treats a seasonal monthly bill as exactly one variable rule", async () => {
+    await setup();
+    const amounts = [8000, 8200, 8600, 9000, 12000, 14000, 15000, 14500, 11000, 8400, 8300, 8800];
+    for (let m = 0; m < 12; m++) {
+      const month = String(m + 1).padStart(2, "0");
+      await addImportedCharge(`e${m}`, `2026-${month}-10`, amounts[m]!, "Con Edison", "batch-1", "cat-util");
+    }
+
+    const outcome = await detectAndCreateRules(repos, [], "2026-12-16" as never);
+    expect(outcome.created).toHaveLength(1);
+    expect(outcome.suggested).toBe(0);
+    expect(outcome.pastSubscriptions).toBe(0);
+
+    const rules = await repos.recurringRules.getAll();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({
+      kind: "Bill",
+      frequency: "monthly",
+      isVariableAmount: true,
+      active: true,
+    });
+    // Recent average of the last 3 charges.
+    expect(rules[0]?.amount).toBe(Math.round((8400 + 8300 + 8800) / 3));
+    // All 12 charges tagged.
+    expect(await repos.transactions.byRecurringRule(rules[0]!.id)).toHaveLength(12);
+  });
+
+  it("ignores manual and Quick-Log entries when measuring the data date", async () => {
+    await setup();
+    // Imported CSV ending Sep 20; the monthly charge was last seen Sep 5.
+    await addImportedCharge("s1", "2026-07-05", 1299, "Spotify", "batch-1");
+    await addImportedCharge("s2", "2026-08-05", 1299, "Spotify", "batch-1");
+    await addImportedCharge("s3", "2026-09-05", 1299, "Spotify", "batch-1");
+    await addImportedCharge("x1", "2026-09-20", 5000, "Whole Foods", "batch-1");
+    // A manual Quick-Log entry dated today: the user's bookkeeping, not
+    // the bank's record. Must not move the reference date.
+    await addCharge("m1", "2026-10-16", 2500, "Chipotle", "cat-other");
+
+    const outcome = await detectAndCreateRules(repos, [], "2026-10-16" as never);
+    expect(outcome.created).toHaveLength(1);
+    expect(outcome.pastSubscriptions).toBe(0);
+    const rule = (await repos.recurringRules.getAll())[0];
+    expect(rule?.active).toBe(true);
   });
 
   it("does not create a rule from 3 weekly coffee purchases with different amounts", async () => {

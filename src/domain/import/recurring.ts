@@ -2,14 +2,19 @@
  * Recurring-charge detection (Phase B2): finds bills and subscriptions in
  * imported history by merchant + schedule consistency.
  *
- * Charges are grouped by merchant AND amount: each merchant's charges are
- * clustered so that amounts within ~10% of the cluster minimum form one
- * stream. A stream is "clear" (auto-create) with 3+ charges on a
- * consistent weekly/monthly/yearly schedule — except weekly, which needs
- * 4+. Weaker streams (2 charges, or 3+ with a wobble) become review
- * suggestions. A merchant whose charges don't cluster but sit on a
- * consistent MONTHLY schedule is a variable bill (utilities, phone);
- * variable amounts never auto-create on weekly or yearly schedules.
+ * For each merchant, FIRST check whether ALL its charges form one
+ * consistent monthly schedule (about one charge per month). If so it is a
+ * single bill — fixed when the amounts sit within ~10%, variable
+ * (utilities, phone) when they spread wider. Seasonal variable bills must
+ * not be split into fake fixed streams.
+ *
+ * Only when a merchant has more than one charge per cycle (e.g. Apple
+ * $2.99 + $10.99 in the same month) do we split by amount: charges
+ * within ~10% of the cluster minimum form one stream. A stream is "clear"
+ * (auto-create) with 3+ charges on a consistent weekly/monthly/yearly
+ * schedule — except weekly, which needs 4+. Weaker streams (2 charges, or
+ * 3+ with a wobble) become review suggestions. Variable amounts never
+ * auto-create on weekly or yearly schedules.
  */
 import type { DateOnly } from "../dates/dateOnly.js";
 import { addDays, addMonthsClamped, diffDays } from "../dates/dateOnly.js";
@@ -167,25 +172,12 @@ function analyzeCluster(
   return buildCandidate(merchantKey, sorted, first, strength, false);
 }
 
-/**
- * Variable-bill fallback: when no amount-cluster produced a candidate,
- * a merchant with 3+ charges on a consistent MONTHLY schedule is a
- * variable bill (utilities, phone). Variable amounts never qualify on
- * weekly or yearly schedules.
- */
-function analyzeVariable(
-  merchantKey: string,
-  list: RecurringCharge[],
-): RecurringCandidate | null {
-  if (list.length < 2) return null;
-  const sorted = [...list].sort((a, b) => (a.date < b.date ? -1 : 1));
-  const intervals: number[] = [];
-  for (let i = 1; i < sorted.length; i++) {
-    intervals.push(diffDays(sorted[i - 1]!.date, sorted[i]!.date));
-  }
-  if (!intervals.every((d) => fitsCadence(d) === "monthly")) return null;
-  const strength = sorted.length >= 3 ? "auto" : "suggest";
-  return buildCandidate(merchantKey, sorted, "monthly", strength, true);
+/** True when amounts sit within ~10% of each other (fixed stream). */
+function amountsAreSimilar(amounts: MinorUnits[]): boolean {
+  const min = Math.min(...amounts);
+  const max = Math.max(...amounts);
+  if (min === 0) return max === 0;
+  return (max - min) / min <= 0.1;
 }
 
 export function detectRecurring(charges: RecurringCharge[]): RecurringCandidate[] {
@@ -199,8 +191,23 @@ export function detectRecurring(charges: RecurringCharge[]): RecurringCandidate[
   const out: RecurringCandidate[] = [];
   for (const [merchantKey, list] of byMerchant) {
     if (list.length < 2) continue;
-    // Cluster by amount: a charge joins the current cluster while it is
-    // within 10% of the cluster minimum (amounts sorted ascending).
+    const sorted = [...list].sort((a, b) => (a.date < b.date ? -1 : 1));
+    const intervals: number[] = [];
+    for (let i = 1; i < sorted.length; i++) {
+      intervals.push(diffDays(sorted[i - 1]!.date, sorted[i]!.date));
+    }
+
+    // About one charge per month: a single bill. Fixed when the amounts
+    // are similar, variable when they spread (seasonal utilities).
+    // Never split these into amount streams.
+    if (intervals.every((d) => fitsCadence(d) === "monthly")) {
+      const strength = sorted.length >= 3 ? "auto" : "suggest";
+      const amountVaries = !amountsAreSimilar(sorted.map((c) => c.amount));
+      out.push(buildCandidate(merchantKey, sorted, "monthly", strength, amountVaries));
+      continue;
+    }
+
+    // More than one charge per cycle: split into amount streams.
     const byAmount = [...list].sort((a, b) => a.amount - b.amount);
     const clusters: RecurringCharge[][] = [];
     for (const c of byAmount) {
@@ -213,18 +220,13 @@ export function detectRecurring(charges: RecurringCharge[]): RecurringCandidate[
       }
     }
 
-    let produced = false;
     for (const cluster of clusters) {
       const candidate = analyzeCluster(merchantKey, cluster);
-      if (candidate) {
-        out.push(candidate);
-        produced = true;
-      }
+      if (candidate) out.push(candidate);
     }
-    if (!produced) {
-      const variable = analyzeVariable(merchantKey, list);
-      if (variable) out.push(variable);
-    }
+    // Clusters that form no pattern are scattered one-off charges: ignored.
+    // (Variable amounts only qualify as one bill when the merchant is about
+    // one charge per month — handled above.)
   }
   return out.sort((a, b) =>
     a.merchantName < b.merchantName ? -1 : a.merchantName > b.merchantName ? 1 : a.avgAmount - b.avgAmount,

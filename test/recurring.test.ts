@@ -67,6 +67,22 @@ describe("detectRecurring", () => {
     expect(four[0]).toMatchObject({ cadence: "weekly", strength: "auto" });
   });
 
+  it("treats a seasonal monthly bill as one variable rule, not split streams", () => {
+    // 12-month electric bill, one charge per month on the 10th, amounts
+    // swinging with the seasons. Must NOT split into fake fixed streams.
+    const amounts = [8000, 8200, 8600, 9000, 12000, 14000, 15000, 14500, 11000, 8400, 8300, 8800];
+    const out = detectRecurring(
+      amounts.map((amount, m) => charge(`2026-${String(m + 1).padStart(2, "0")}-10`, amount, "CONED")),
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      cadence: "monthly",
+      strength: "auto",
+      amountVaries: true,
+    });
+    expect(out[0]?.charges).toHaveLength(12);
+  });
+
   it("auto-detects varying-amount bills on a consistent schedule", () => {
     const out = detectRecurring([
       charge("2026-07-10", 6020, "CONED"),
