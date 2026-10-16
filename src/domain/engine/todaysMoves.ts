@@ -27,7 +27,8 @@ export type MoveKind =
   | "stale-pending"
   | "old-iou"
   | "unused-subscription"
-  | "goal-past-due";
+  | "goal-past-due"
+  | "needs-review";
 
 export interface TodaysMove {
   id: string;
@@ -65,6 +66,8 @@ export interface MovesContext {
    * reach, not just a no-op. Same key format as the committed-bills merge.
    */
   settledOccurrenceKeys?: ReadonlySet<string>;
+  /** Open "Needs review" inbox items (bank import). */
+  openReviewCount?: number;
 }
 
 function formatMoney(amount: MinorUnits, currency: string): string {
@@ -233,6 +236,19 @@ export function rankTodaysMoves(ctx: MovesContext): TodaysMove[] {
       title: `${g.name}: mark complete?`,
       relatedId: g.id,
       actions: ["snooze", "open"],
+    });
+  }
+
+  // 8. bank-import review inbox: one move when anything needs review.
+  const reviewCount = ctx.openReviewCount ?? 0;
+  if (reviewCount > 0) {
+    moves.push({
+      id: "move:needs-review",
+      kind: "needs-review",
+      priority: 5,
+      title: `${reviewCount} imported ${reviewCount === 1 ? "item" : "items"} need${reviewCount === 1 ? "s" : ""} review`,
+      relatedId: "review-inbox",
+      actions: ["open"],
     });
   }
 

@@ -55,6 +55,13 @@ export interface RecurringRule {
   skippedDates: DateOnly[]; // occurrences skipped by the user
   lastGeneratedThrough?: DateOnly; // catch-up watermark per rule
 
+  // --- Auto-detected recurring (Phase B2) ---
+  /** Merchant key this rule was auto-created from (import detection). */
+  merchantKey?: string;
+  /** True when the import engine created this rule automatically. */
+  autoCreated?: boolean;
+  autoCreatedAt?: string;
+
   active: boolean;
   createdAt: string;
   updatedAt: string;

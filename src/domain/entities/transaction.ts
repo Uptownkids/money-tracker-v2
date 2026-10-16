@@ -48,6 +48,12 @@ export interface Transaction {
   goalId?: string; // goal contribution this relates to
   splitId?: string; // IOU this transaction settles or creates
 
+  // Bank import provenance (optional). Set when the row came from a CSV
+  // import (Phase A) or live sync (Phase C, later). importBatchId is the
+  // batch that created the row — rollback deletes by it.
+  bankFingerprint?: string;
+  importBatchId?: string;
+
   createdAt: string;
   updatedAt: string;
 }

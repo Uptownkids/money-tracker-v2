@@ -43,14 +43,17 @@ import { Goals } from "../components/Goals.js";
 import { Upcoming } from "../components/Upcoming.js";
 import { Ious } from "../components/Ious.js";
 import { Insights } from "../components/Insights.js";
+import { History } from "../components/History.js";
 import { Onboarding } from "../components/Onboarding.js";
 import { SettingsSheet, BackupBanner } from "../components/Settings.js";
 import { TransferReviewBanner } from "../components/TransferReview.js";
 import { PaydayRun } from "../components/PaydayRun.js";
+import { ReviewInboxSheet } from "../components/ReviewInbox.js";
 import { applySwUpdate, onSwUpdate } from "./swUpdates.js";
+import { requestPersistentStorage } from "./persistentStorage.js";
 import { loadDemoData } from "./seed.js";
 
-type Tab = "dashboard" | "log" | "bills" | "goals" | "accounts" | "insights";
+type Tab = "dashboard" | "log" | "bills" | "goals" | "accounts" | "insights" | "history";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
@@ -59,6 +62,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "goals", label: "Goals" },
   { id: "accounts", label: "Accounts" },
   { id: "insights", label: "Insights" },
+  { id: "history", label: "History" },
 ];
 
 function Loading() {
@@ -268,6 +272,7 @@ function SwUpdateBanner() {
 
 export function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [state, setState] = useState<DashboardState | null>(null);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -286,6 +291,9 @@ export function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   // Service worker update banner.
   const [swUpdateAvailable, setSwUpdateAvailable] = useState(false);
+  // Persistent storage request on app start (navigator.storage.persist()).
+  // Null until the browser answers; Settings shows the granted state.
+  const [storagePersisted, setStoragePersisted] = useState<boolean | null>(null);
   // One-tap deep links (?add= / ?adjust=).
   const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
   const [deepLinkNotReady, setDeepLinkNotReady] = useState(false);
@@ -304,6 +312,18 @@ export function App() {
   // onSwUpdate fires immediately if an update is already waiting, so late
   // subscribers never miss it.
   useEffect(() => onSwUpdate(() => setSwUpdateAvailable(true)), []);
+
+  // Ask the browser to keep this origin's IndexedDB under storage
+  // pressure. Idempotent; safe under StrictMode's double-invoked effects.
+  useEffect(() => {
+    let alive = true;
+    void requestPersistentStorage().then((granted) => {
+      if (alive) setStoragePersisted(granted);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -418,6 +438,9 @@ export function App() {
         case "unused-subscription":
           setBillsEditRuleId(move.relatedId);
           setTab("bills");
+          return;
+        case "needs-review":
+          setReviewOpen(true);
           return;
         case "overdue-bill":
         case "bill-due-soon": {
@@ -687,7 +710,7 @@ export function App() {
         {tab === "dashboard" && (
           <>
             {isDemoMode() && <DemoBanner onChanged={reload} />}
-            <BackupBanner onOpenSettings={() => setSettingsOpen(true)} />
+            <BackupBanner />
             <TransferReviewBanner onChanged={reload} />
 
             {error ? (
@@ -749,6 +772,7 @@ export function App() {
         {tab === "accounts" && <Accounts onChanged={reload} />}
 
         {tab === "insights" && <Insights />}
+        {tab === "history" && <History />}
       </div>
 
       <QuickLog
@@ -800,6 +824,7 @@ export function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onChanged={reload}
+        storagePersisted={storagePersisted}
       />
 
       {toast && (
@@ -821,17 +846,28 @@ export function App() {
               type="button"
               onClick={() => setTab(t.id)}
               aria-current={tab === t.id ? "page" : undefined}
-              className={`flex-1 py-3.5 text-sm font-medium transition-colors ${
+              className={`relative flex-1 py-3.5 text-sm font-medium transition-colors ${
                 tab === t.id
                   ? "text-stone-900 dark:text-stone-100"
                   : "text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
               }`}
             >
               {t.label}
+              {t.id === "dashboard" && (state?.openReviewCount ?? 0) > 0 && (
+                <span
+                  className="absolute top-2 ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-stone-900 px-1 text-[10px] font-semibold text-white dark:bg-stone-100 dark:text-stone-900"
+                  aria-label={`${state?.openReviewCount} items need review`}
+                >
+                  {state?.openReviewCount}
+                </span>
+              )}
             </button>
           ))}
         </div>
       </nav>
+      {reviewOpen && (
+        <ReviewInboxSheet onClose={() => setReviewOpen(false)} onChanged={reload} />
+      )}
     </div>
   );
 }

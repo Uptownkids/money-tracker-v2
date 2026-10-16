@@ -13,11 +13,16 @@ import type { RecurringOverride, RecurringRule } from "../domain/entities/recurr
 import type { Split } from "../domain/entities/split.js";
 import type { DailySnapshot, PaydayRunState, Settings } from "../domain/entities/settings.js";
 import type { SnoozedMove } from "../domain/entities/snoozedMove.js";
+import type { ImportBatch } from "../domain/entities/importBatch.js";
+import type { BankFingerprint } from "../domain/entities/bankFingerprint.js";
+import type { BankAccountMap } from "../domain/entities/bankAccountMap.js";
+import type { ReviewItem } from "../domain/entities/reviewItem.js";
+import type { MerchantRule } from "../domain/entities/merchantRule.js";
 import { decimalsOf } from "../domain/money/currency.js";
 
 export const BACKUP_VERSION = 1;
 /** Days without a backup before the banner nudges. */
-export const BACKUP_REMINDER_DAYS = 30;
+export const BACKUP_REMINDER_DAYS = 14;
 
 export interface BackupTables {
   accounts: Account[];
@@ -31,6 +36,12 @@ export interface BackupTables {
   paydayRuns: PaydayRunState[];
   dailySnapshots: DailySnapshot[];
   snoozedMoves: SnoozedMove[];
+  /** Optional: absent in backups written before bank import existed. */
+  importBatches?: ImportBatch[];
+  bankFingerprints?: BankFingerprint[];
+  bankAccountMaps?: BankAccountMap[];
+  reviewItems?: ReviewItem[];
+  merchantRules?: MerchantRule[];
 }
 
 export interface BackupData {
@@ -67,7 +78,7 @@ function defaultSettings(nowIso: string): Settings {
   };
 }
 
-/** Stamp settings.lastBackupAt to now (used by every export path). */
+/** Stamp settings.lastBackupAt to now (call only after the export actually completes). */
 export async function markBackedUp(repos: Repositories, nowIso: string): Promise<void> {
   const existing = await repos.settings.get();
   if (existing) {
@@ -77,11 +88,17 @@ export async function markBackedUp(repos: Repositories, nowIso: string): Promise
   }
 }
 
-/** Serialize every table to a versioned JSON object. Stamps lastBackupAt. */
+/**
+ * Serialize every table to a versioned JSON object. Does NOT stamp
+ * settings.lastBackupAt on the live database — the caller must call
+ * markBackedUp only after the export actually completes, because the
+ * user may cancel the share sheet without saving. The exported settings
+ * copy carries the backup time so the file itself reflects when it was
+ * made.
+ */
 export async function exportAll(repos: Repositories): Promise<BackupData> {
   const nowIso = new Date().toISOString();
-  // Stamp first so the exported settings row carries the fresh backup time.
-  await markBackedUp(repos, nowIso);
+  const settingsRows = await repos.settings.getAll();
   const tables: BackupTables = {
     accounts: await repos.accounts.getAll(),
     categories: await repos.categories.getAll(),
@@ -90,10 +107,15 @@ export async function exportAll(repos: Repositories): Promise<BackupData> {
     recurringOverrides: await repos.recurringOverrides.getAll(),
     goals: await repos.goals.getAll(),
     splits: await repos.splits.getAll(),
-    settings: await repos.settings.getAll(),
+    settings: settingsRows.map((s) => ({ ...s, lastBackupAt: nowIso })),
     paydayRuns: await repos.paydayRuns.getAll(),
     dailySnapshots: await repos.dailySnapshots.getAll(),
     snoozedMoves: await repos.snoozedMoves.getAll(),
+    importBatches: await repos.importBatches.getAll(),
+    bankFingerprints: await repos.bankFingerprints.getAll(),
+    bankAccountMaps: await repos.bankAccountMaps.getAll(),
+    reviewItems: await repos.reviewItems.getAll(),
+    merchantRules: await repos.merchantRules.getAll(),
   };
   return { version: BACKUP_VERSION, exportedAt: nowIso, tables };
 }
@@ -289,6 +311,30 @@ export function validateBackup(json: unknown): BackupValidation {
     };
   }
   if (errors.length > 0) return { ok: false, errors };
+
+  // Optional bank-import tables (absent in backups written before the
+  // feature existed). Validated lightly when present.
+  const optionalTables: Record<string, string> = {
+    importBatches: "id",
+    bankFingerprints: "fingerprint",
+    bankAccountMaps: "id",
+    reviewItems: "id",
+    merchantRules: "id",
+  };
+  for (const [name, idField] of Object.entries(optionalTables)) {
+    const rows = tableObj[name];
+    if (rows === undefined) continue;
+    if (!Array.isArray(rows)) {
+      return fail(`The "${name}" table must be a list of rows.`);
+    }
+    for (let i = 0; i < rows.length && errors.length < MAX_ERRORS; i++) {
+      const row = rows[i] as Record<string, unknown>;
+      if (typeof row !== "object" || row === null || typeof row[idField] !== "string") {
+        errors.push(`The "${name}" table has a row at position ${i} with a missing "${idField}".`);
+      }
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
   return { ok: true, data: json as BackupData };
 }
 
@@ -311,6 +357,11 @@ export async function importAll(repos: Repositories, data: BackupData): Promise<
     repos.paydayRuns.clear(),
     repos.dailySnapshots.clear(),
     repos.snoozedMoves.clear(),
+    repos.importBatches.clear(),
+    repos.bankFingerprints.clear(),
+    repos.bankAccountMaps.clear(),
+    repos.reviewItems.clear(),
+    repos.merchantRules.clear(),
   ]);
   await Promise.all([
     repos.accounts.putMany(t.accounts),
@@ -324,6 +375,11 @@ export async function importAll(repos: Repositories, data: BackupData): Promise<
     repos.paydayRuns.putMany(t.paydayRuns),
     repos.dailySnapshots.putMany(t.dailySnapshots),
     repos.snoozedMoves.putMany(t.snoozedMoves),
+    repos.importBatches.putMany(t.importBatches ?? []),
+    repos.bankFingerprints.putMany(t.bankFingerprints ?? []),
+    repos.bankAccountMaps.putMany(t.bankAccountMaps ?? []),
+    repos.reviewItems.putMany(t.reviewItems ?? []),
+    repos.merchantRules.putMany(t.merchantRules ?? []),
   ]);
 }
 
@@ -370,7 +426,7 @@ export function transactionsToCsv(
 
 /**
  * True when a backup reminder is due: never backed up, or the last one
- * is more than 30 days old. Pure; both inputs are ISO strings.
+ * is more than 14 days old. Pure; both inputs are ISO strings.
  */
 export function shouldRemindBackup(
   lastBackupAt: string | undefined,
