@@ -202,9 +202,18 @@ describe("recurringDetect", () => {
     await addCharge("s1", "2026-06-15", 1299, "Spotify");
     await addCharge("s2", "2026-07-15", 1299, "Spotify");
     await addCharge("s3", "2026-08-15", 1299, "Spotify");
-    // Today is 2026-10-16; expected 2026-09-15 never arrived.
+    // Data runs through Aug 18: the Sep 15 charge isn't missed yet, the
+    // data just ends. Missed is measured against the data, not today.
+    await addCharge("x1", "2026-08-18", 5000, "Whole Foods");
+    const first = await detectAndCreateRules(repos, [], "2026-08-19" as never);
+    expect(first.created).toHaveLength(1);
+    expect(first.flagged).toBe(0);
+    expect((await repos.recurringRules.getAll())[0]?.active).toBe(true);
+
+    // Data now runs through Oct 10 with no Sep 15 charge: actually missed.
+    await addCharge("x2", "2026-10-10", 4200, "Whole Foods");
     const outcome = await detectAndCreateRules(repos, [], "2026-10-16" as never);
-    expect(outcome.created).toHaveLength(1);
+    expect(outcome.created).toHaveLength(0);
     expect(outcome.flagged).toBe(1);
 
     const rule = (await repos.recurringRules.getAll())[0];
@@ -214,13 +223,125 @@ describe("recurringDetect", () => {
     expect(reviews.some((r) => r.reasons.includes("missed-charge"))).toBe(true);
   });
 
+  it("importing an older CSV never ends an active rule", async () => {
+    await setup();
+    await addCharge("s1", "2026-08-15", 1299, "Spotify");
+    await addCharge("s2", "2026-09-15", 1299, "Spotify");
+    await addCharge("s3", "2026-10-15", 1299, "Spotify");
+    const first = await detectAndCreateRules(repos, [], "2026-10-16" as never);
+    expect(first.created).toHaveLength(1);
+
+    // A stale historical import arrives; every row predates the rule.
+    // The reference date stays at Oct 15 (the newest data), so the rule
+    // is untouched.
+    await addCharge("old1", "2026-03-10", 2500, "Trader Joes");
+    await addCharge("old2", "2026-05-25", 3100, "Trader Joes");
+    const second = await detectAndCreateRules(repos, [], "2026-10-16" as never);
+    expect(second.flagged).toBe(0);
+    const rule = (await repos.recurringRules.getAll())[0];
+    expect(rule?.active).toBe(true);
+  });
+
+  it("creates a long-dead pattern as an ended rule with no fanfare", async () => {
+    await setup();
+    await addCharge("s1", "2026-03-15", 1299, "Spotify");
+    await addCharge("s2", "2026-04-15", 1299, "Spotify");
+    await addCharge("s3", "2026-05-15", 1299, "Spotify");
+    // The data runs through October: this pattern died in June.
+    await addCharge("x1", "2026-10-10", 5000, "Whole Foods");
+
+    const outcome = await detectAndCreateRules(repos, [], "2026-10-16" as never);
+    expect(outcome.created).toHaveLength(0);
+    expect(outcome.pastSubscriptions).toBe(1);
+    expect(outcome.flagged).toBe(0);
+
+    const rules = await repos.recurringRules.getAll();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ active: false, endDate: "2026-06-15", name: "Spotify" });
+    // Past charges are still tagged, so history is complete.
+    for (const id of ["s1", "s2", "s3"]) {
+      expect((await repos.transactions.getById(id))?.recurringRuleId).toBe(rules[0]?.id);
+    }
+    // No "possibly cancelled" review item.
+    const reviews = await repos.reviewItems.open();
+    expect(reviews.some((r) => r.reasons.includes("missed-charge"))).toBe(false);
+  });
+
+  it("does not create a rule from 3 weekly coffee purchases with different amounts", async () => {
+    await setup();
+    await addCharge("c1", "2026-09-18", 450, "Blue Bottle Coffee", "cat-other");
+    await addCharge("c2", "2026-09-25", 675, "Blue Bottle Coffee", "cat-other");
+    await addCharge("c3", "2026-10-02", 525, "Blue Bottle Coffee", "cat-other");
+
+    const outcome = await detectAndCreateRules(repos, [], "2026-10-16" as never);
+    expect(outcome.created).toHaveLength(0);
+    expect(outcome.suggested).toBe(0);
+    expect(await repos.recurringRules.getAll()).toHaveLength(0);
+  });
+
+  it("weekly patterns need 4 similar charges to auto-create", async () => {
+    await setup();
+    await addCharge("w1", "2026-09-18", 500, "Blue Bottle Coffee", "cat-other");
+    await addCharge("w2", "2026-09-25", 500, "Blue Bottle Coffee", "cat-other");
+    await addCharge("w3", "2026-10-02", 500, "Blue Bottle Coffee", "cat-other");
+
+    const first = await detectAndCreateRules(repos, [], "2026-10-16" as never);
+    expect(first.created).toHaveLength(0);
+    expect(first.suggested).toBe(1);
+
+    await addCharge("w4", "2026-10-09", 500, "Blue Bottle Coffee", "cat-other");
+    const second = await detectAndCreateRules(repos, [], "2026-10-16" as never);
+    expect(second.created).toHaveLength(1);
+    expect(second.created[0]?.message).toContain("weekly");
+  });
+
+  it("groups fixed-amount charges within 10% into one stream", async () => {
+    await setup();
+    await addCharge("s1", "2026-08-15", 1299, "Spotify");
+    await addCharge("s2", "2026-09-15", 1349, "Spotify"); // small bump, same stream
+    await addCharge("s3", "2026-10-15", 1299, "Spotify");
+
+    const outcome = await detectAndCreateRules(repos, [], "2026-10-16" as never);
+    expect(outcome.created).toHaveLength(1);
+    const rule = (await repos.recurringRules.getAll())[0];
+    expect(rule?.amount).toBe(Math.round((1299 + 1349 + 1299) / 3));
+  });
+
+  it("detects separate amount-streams from one merchant as separate rules", async () => {
+    await setup();
+    // iCloud+ $2.99 and Apple One $10.99, interleaved monthly.
+    await addCharge("a1", "2026-08-15", 299, "Apple");
+    await addCharge("b1", "2026-08-20", 1099, "Apple");
+    await addCharge("a2", "2026-09-15", 299, "Apple");
+    await addCharge("b2", "2026-09-20", 1099, "Apple");
+    await addCharge("a3", "2026-10-15", 299, "Apple");
+    await addCharge("b3", "2026-10-20", 1099, "Apple");
+
+    const outcome = await detectAndCreateRules(repos, [], "2026-10-21" as never);
+    expect(outcome.created).toHaveLength(2);
+
+    const rules = await repos.recurringRules.getAll();
+    expect(rules).toHaveLength(2);
+    expect(rules.map((r) => r.amount).sort((a, b) => a - b)).toEqual([299, 1099]);
+    expect(rules.every((r) => r.kind === "Subscription" && r.frequency === "monthly")).toBe(true);
+
+    // A re-run creates nothing: both streams are already tracked.
+    const again = await detectAndCreateRules(repos, [], "2026-10-21" as never);
+    expect(again.created).toHaveLength(0);
+    expect((await repos.recurringRules.getAll())).toHaveLength(2);
+  });
+
   it("reactivating a missed charge turns the rule back on", async () => {
     await setup();
     await addCharge("s1", "2026-06-15", 1299, "Spotify");
     await addCharge("s2", "2026-07-15", 1299, "Spotify");
     await addCharge("s3", "2026-08-15", 1299, "Spotify");
+    await addCharge("x1", "2026-08-18", 5000, "Whole Foods");
+    await detectAndCreateRules(repos, [], "2026-08-19" as never);
+    await addCharge("x2", "2026-10-10", 4200, "Whole Foods");
     await detectAndCreateRules(repos, [], "2026-10-16" as never);
     const flag = (await repos.reviewItems.open()).find((r) => r.reasons.includes("missed-charge"));
+    expect(flag).toBeTruthy();
     await resolveMissedCharge(repos, flag!.id, true);
     const rule = (await repos.recurringRules.getAll())[0];
     expect(rule?.active).toBe(true);
@@ -231,6 +352,9 @@ describe("recurringDetect", () => {
     await addCharge("s1", "2026-06-15", 1299, "Spotify");
     await addCharge("s2", "2026-07-15", 1299, "Spotify");
     await addCharge("s3", "2026-08-15", 1299, "Spotify");
+    await addCharge("x1", "2026-08-18", 5000, "Whole Foods");
+    await detectAndCreateRules(repos, [], "2026-08-19" as never); // rule active
+    await addCharge("x2", "2026-10-01", 4100, "Whole Foods");
     await detectAndCreateRules(repos, [], "2026-10-16" as never); // ends the rule (missed Sept)
 
     await addCharge("s4", "2026-10-20", 1299, "Spotify");

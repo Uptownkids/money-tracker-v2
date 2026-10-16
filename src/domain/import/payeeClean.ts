@@ -7,6 +7,7 @@
  *     -> "Citi Bike"
  *   "RECURRING PAYMENT AUTHORIZED ON 10/01 SPOTIFY USA 877-778-1161" -> "Spotify"
  *   "DIRECT DEP ROC NATION LLC PAYROLL" -> "Roc Nation"
+ *   "DIRECT DEPOSIT ACME CORP PAYROLL" -> "Acme"
  *   "ZELLE TO MALIKE SIDIBE ON 10/16/2026 REF # 123" -> "Zelle to Malike Sidibe"
  */
 import { normalizeDescription } from "./fingerprints.js";
@@ -19,6 +20,7 @@ const PREFIX_RES = [
   /^RECURRING PAYMENT /,
   /^POS PURCHASE /,
   /^DEBIT PURCHASE /,
+  /^DIRECT DEPOSIT /,
   /^DIRECT DEP /,
 ];
 

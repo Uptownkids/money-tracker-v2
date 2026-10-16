@@ -333,14 +333,21 @@ export function CsvImportSection() {
             {plan.summary.newRows} new · {plan.summary.matched} matched to your entries ·{" "}
             {plan.summary.billSettled} bills settled · {plan.summary.transfersNew} transfers ·{" "}
             {plan.summary.duplicates} duplicates skipped · {plan.summary.needsReview} need review
-            {(plan.recurringPreview.wouldCreate > 0 || plan.recurringPreview.wouldSuggest > 0) && (
+            {(plan.recurringPreview.wouldCreate > 0 ||
+              plan.recurringPreview.wouldSuggest > 0 ||
+              plan.recurringPreview.wouldEnd > 0) && (
               <>
                 {" · "}
-                {plan.recurringPreview.wouldCreate > 0 &&
-                  `${plan.recurringPreview.wouldCreate} new bill${plan.recurringPreview.wouldCreate === 1 ? "" : "s"} detected`}
-                {plan.recurringPreview.wouldCreate > 0 && plan.recurringPreview.wouldSuggest > 0 && ", "}
-                {plan.recurringPreview.wouldSuggest > 0 &&
-                  `${plan.recurringPreview.wouldSuggest} possible subscription${plan.recurringPreview.wouldSuggest === 1 ? "" : "s"}`}
+                {[
+                  plan.recurringPreview.wouldCreate > 0 &&
+                    `${plan.recurringPreview.wouldCreate} new bill${plan.recurringPreview.wouldCreate === 1 ? "" : "s"} detected`,
+                  plan.recurringPreview.wouldEnd > 0 &&
+                    `${plan.recurringPreview.wouldEnd} past subscription${plan.recurringPreview.wouldEnd === 1 ? "" : "s"}`,
+                  plan.recurringPreview.wouldSuggest > 0 &&
+                    `${plan.recurringPreview.wouldSuggest} possible subscription${plan.recurringPreview.wouldSuggest === 1 ? "" : "s"}`,
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
               </>
             )}
           </p>
@@ -423,6 +430,8 @@ export function CsvImportSection() {
           <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">
             {summary.imported + summary.transfersNew} imported · {summary.matched} matched ·{" "}
             {summary.billSettled} bills settled · {summary.needsReview} need review
+            {summary.recurring.pastSubscriptions > 0 &&
+              ` · Past subscriptions found: ${summary.recurring.pastSubscriptions}`}
           </p>
           {summary.recurring.created.length > 0 && (
             <ul className="mt-2 space-y-1.5">

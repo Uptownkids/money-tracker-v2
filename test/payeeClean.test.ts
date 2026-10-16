@@ -20,6 +20,7 @@ describe("cleanPayee", () => {
 
   it("cleans direct deposits", () => {
     expect(cleanPayee("DIRECT DEP ROC NATION LLC PAYROLL")).toBe("Roc Nation");
+    expect(cleanPayee("DIRECT DEPOSIT ROC NATION LLC PAYROLL")).toBe("Roc Nation");
   });
 
   it("keeps Zelle phrases readable", () => {

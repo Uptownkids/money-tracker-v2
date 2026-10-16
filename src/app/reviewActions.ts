@@ -10,6 +10,7 @@ import { EXTERNAL_ACCOUNT_ID } from "../domain/import/selfTransfers.js";
 import {
   applyRecurringPriceChange,
   createRuleForMerchant,
+  findClosestRule,
   reactivateRecurringRule,
 } from "./recurringDetect.js";
 
@@ -246,8 +247,8 @@ export async function confirmRecurringSuggestion(
   repos: Repositories,
   itemId: string,
 ): Promise<string | null> {
-  const { item } = await getItem(repos, itemId);
-  const info = await createRuleForMerchant(repos, item.merchantKey);
+  const { item, tx } = await getItem(repos, itemId);
+  const info = await createRuleForMerchant(repos, item.merchantKey, tx.amount);
   await resolveItem(repos, itemId);
   return info ? info.message : null;
 }
@@ -255,8 +256,10 @@ export async function confirmRecurringSuggestion(
 /** Accept a price increase: update the rule to the new amount. */
 export async function applyPriceIncrease(repos: Repositories, itemId: string): Promise<void> {
   const { item, tx } = await getItem(repos, itemId);
-  const rule = (await repos.recurringRules.getAll()).find(
-    (r) => r.merchantKey === item.merchantKey && r.autoCreated,
+  const rule = findClosestRule(
+    (await repos.recurringRules.getAll()).filter((r) => r.autoCreated),
+    item.merchantKey,
+    tx.amount,
   );
   if (!rule) throw new Error("applyPriceIncrease: no auto-created rule for this merchant");
   await applyRecurringPriceChange(repos, rule.id, tx.amount);
@@ -272,10 +275,12 @@ export async function resolveMissedCharge(
   itemId: string,
   reactivate: boolean,
 ): Promise<void> {
-  const { item } = await getItem(repos, itemId);
+  const { item, tx } = await getItem(repos, itemId);
   if (reactivate) {
-    const rule = (await repos.recurringRules.getAll()).find(
-      (r) => r.merchantKey === item.merchantKey && r.autoCreated,
+    const rule = findClosestRule(
+      (await repos.recurringRules.getAll()).filter((r) => r.autoCreated),
+      item.merchantKey,
+      tx.amount,
     );
     if (rule) await reactivateRecurringRule(repos, rule.id);
   }
@@ -293,8 +298,10 @@ export async function resolveResurrected(
 ): Promise<void> {
   const { item, tx } = await getItem(repos, itemId);
   if (reactivate) {
-    const rule = (await repos.recurringRules.getAll()).find(
-      (r) => r.merchantKey === item.merchantKey && r.autoCreated,
+    const rule = findClosestRule(
+      (await repos.recurringRules.getAll()).filter((r) => r.autoCreated),
+      item.merchantKey,
+      tx.amount,
     );
     if (!rule) throw new Error("resolveResurrected: no auto-created rule for this merchant");
     await reactivateRecurringRule(repos, rule.id);

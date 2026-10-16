@@ -46,7 +46,7 @@ export interface ImportPlan {
     needsReview: number;
   };
   /** Bills/subscriptions the commit would auto-detect (dry run). */
-  recurringPreview: { wouldCreate: number; wouldSuggest: number };
+  recurringPreview: { wouldCreate: number; wouldSuggest: number; wouldEnd: number };
 }
 
 async function buildContext(repos: Repositories): Promise<MatchContext> {
@@ -384,7 +384,7 @@ export async function commitImport(
       transfersAbsorbed: 0,
       needsReview: 0,
       reviewItemIds: [],
-      recurring: { created: [], suggested: 0, flagged: 0 },
+      recurring: { created: [], pastSubscriptions: 0, suggested: 0, flagged: 0 },
       reconciliation: [],
     };
   }

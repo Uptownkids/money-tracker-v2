@@ -22,6 +22,8 @@ import { merchantKey } from "../domain/import/payeeClean.js";
 import {
   detectRecurring,
   nextExpectedDate,
+  sameStream,
+  streamKey,
   type DetectedCadence,
   type RecurringCandidate,
   type RecurringCharge,
@@ -66,6 +68,8 @@ export interface CreatedRuleInfo {
 
 export interface DetectionOutcome {
   created: CreatedRuleInfo[];
+  /** Patterns whose last charge predates the data: ended rules, history only. */
+  pastSubscriptions: number;
   suggested: number;
   flagged: number;
 }
@@ -137,60 +141,132 @@ async function dismissMerchant(repos: Repositories, merchantKey: string): Promis
 }
 
 /**
+ * Latest transaction date in an account's imported data. Missed-charge
+ * checks measure against this — never against today — so importing an
+ * older or stale CSV can never end an active rule.
+ */
+async function latestDataDate(
+  repos: Repositories,
+  accountId: string,
+  fallback: DateOnly,
+): Promise<DateOnly> {
+  const txs = await repos.transactions.byAccount(accountId);
+  let latest: DateOnly | null = null;
+  for (const t of txs) {
+    if (t.status !== "Cleared" && t.status !== "Pending") continue;
+    if (latest === null || compareDateOnly(t.date, latest) > 0) latest = t.date;
+  }
+  return latest ?? fallback;
+}
+
+/**
+ * Among a merchant's rules, the one whose amount best matches a charge.
+ * Used so multi-stream merchants (Apple $2.99 and $10.99) resolve flags
+ * against the right rule.
+ */
+export function findClosestRule(
+  rules: readonly RecurringRule[],
+  merchantKey: string,
+  amount: number,
+): RecurringRule | undefined {
+  let best: RecurringRule | undefined;
+  let bestDiff = Infinity;
+  for (const r of rules) {
+    if (r.merchantKey !== merchantKey) continue;
+    const diff = Math.abs(r.amount - amount);
+    if (diff < bestDiff) {
+      best = r;
+      bestDiff = diff;
+    }
+  }
+  return best;
+}
+
+/** True when a candidate's stream was dismissed (exact stream key, or a bare merchant key dismisses all streams). */
+function isStreamDismissed(dismissed: Set<string>, c: RecurringCandidate): boolean {
+  if (dismissed.has(c.merchantKey)) return true;
+  return dismissed.has(streamKey(c.merchantKey, c.avgAmount));
+}
+
+/** True when an auto rule already tracks a candidate's stream. */
+function streamAlreadyTracked(rules: readonly RecurringRule[], c: RecurringCandidate): boolean {
+  return rules.some((r) => sameStream(r.merchantKey ?? "", r.amount, c.merchantKey, c.avgAmount));
+}
+
+/**
  * Dry-run detection for the pre-commit summary: how many rules would be
- * auto-created and how many suggestions raised. No writes.
+ * auto-created, how many are already-ended history, and how many
+ * suggestions raised. No writes.
  */
 export async function previewRecurringDetection(
   repos: Repositories,
-): Promise<{ wouldCreate: number; wouldSuggest: number }> {
+  today: DateOnly = todayLocal(),
+): Promise<{ wouldCreate: number; wouldSuggest: number; wouldEnd: number }> {
   const dismissed = await dismissedMerchants(repos);
   const rules = await repos.recurringRules.getAll();
-  const existing = new Set(
-    rules.map((r) => r.merchantKey).filter((k): k is string => !!k),
-  );
   const allTx = await repos.transactions.getAll();
   const candidates = detectRecurring(chargesFromTransactions(allTx));
   let wouldCreate = 0;
   let wouldSuggest = 0;
+  let wouldEnd = 0;
   for (const c of candidates) {
-    if (dismissed.has(c.merchantKey) || existing.has(c.merchantKey)) continue;
-    if (c.strength === "auto") wouldCreate++;
-    else wouldSuggest++;
+    if (isStreamDismissed(dismissed, c) || streamAlreadyTracked(rules, c)) continue;
+    if (c.strength === "suggest") {
+      wouldSuggest++;
+      continue;
+    }
+    const refDate = await latestDataDate(repos, c.accountId, today);
+    const lastCharge = c.charges[c.charges.length - 1]!;
+    if (diffDays(nextExpectedDate(lastCharge.date, c.cadence), refDate) > MISSED_GRACE_DAYS) {
+      wouldEnd++;
+    } else {
+      wouldCreate++;
+    }
   }
-  return { wouldCreate, wouldSuggest };
+  return { wouldCreate, wouldSuggest, wouldEnd };
 }
 
 /**
  * Detect and auto-create rules. `newTransactions` are the just-imported
  * rows (for change flags); detection itself scans all untagged expenses.
+ *
+ * A clear pattern whose last charge already predates the imported data
+ * (stale) is created directly as an ended, history-only rule: no
+ * "Now tracking" message and no "possibly cancelled" flag. The count
+ * lands in `outcome.pastSubscriptions` for the import summary.
  */
 export async function detectAndCreateRules(
   repos: Repositories,
   newTransactions: readonly Transaction[],
   today: DateOnly = todayLocal(),
 ): Promise<DetectionOutcome> {
-  const outcome: DetectionOutcome = { created: [], suggested: 0, flagged: 0 };
+  const outcome: DetectionOutcome = { created: [], pastSubscriptions: 0, suggested: 0, flagged: 0 };
   const dismissed = await dismissedMerchants(repos);
   const rules = await repos.recurringRules.getAll();
-  const ruleByMerchant = new Map<string, RecurringRule>();
-  for (const r of rules) {
-    if (r.merchantKey) ruleByMerchant.set(r.merchantKey, r);
-  }
 
   // --- 1+2. Detect + auto-create ---
   const allTx = await repos.transactions.getAll();
   const candidates = detectRecurring(chargesFromTransactions(allTx));
   for (const c of candidates) {
-    if (dismissed.has(c.merchantKey)) continue;
-    if (ruleByMerchant.has(c.merchantKey)) continue;
+    if (isStreamDismissed(dismissed, c)) continue;
+    if (streamAlreadyTracked(rules, c)) continue;
     if (c.strength === "suggest") {
       await suggestRecurring(repos, c);
       outcome.suggested++;
       continue;
     }
+    const lastCharge = c.charges[c.charges.length - 1]!;
+    const refDate = await latestDataDate(repos, c.accountId, today);
+    if (diffDays(nextExpectedDate(lastCharge.date, c.cadence), refDate) > MISSED_GRACE_DAYS) {
+      // Stale pattern: history-only ended rule, no fanfare.
+      const info = await createRule(repos, c, { ended: true });
+      outcome.pastSubscriptions++;
+      rules.push((await repos.recurringRules.getById(info.ruleId))!);
+      continue;
+    }
     const info = await createRule(repos, c);
     outcome.created.push(info);
-    ruleByMerchant.set(c.merchantKey, (await repos.recurringRules.getById(info.ruleId))!);
+    rules.push((await repos.recurringRules.getById(info.ruleId))!);
   }
 
   // --- 4. Change flags ---
@@ -201,9 +277,14 @@ export async function detectAndCreateRules(
   return outcome;
 }
 
-export async function createRule(repos: Repositories, c: RecurringCandidate): Promise<CreatedRuleInfo> {
+export async function createRule(
+  repos: Repositories,
+  c: RecurringCandidate,
+  opts?: { ended?: boolean },
+): Promise<CreatedRuleInfo> {
   const now = nowIso();
   const lastCharge = c.charges[c.charges.length - 1]!;
+  const nextDue = nextExpectedDate(lastCharge.date, c.cadence);
   const rule: RecurringRule = {
     id: crypto.randomUUID(),
     kind: kindFor(c),
@@ -213,7 +294,7 @@ export async function createRule(repos: Repositories, c: RecurringCandidate): Pr
     accountId: c.accountId,
     categoryId: c.categoryId ?? (await fallbackCategory(repos)),
     frequency: c.frequency,
-    nextDueDate: nextExpectedDate(lastCharge.date, c.cadence),
+    nextDueDate: nextDue,
     weekendShift: "none",
     autoPay: false,
     reminderOffsetDays: 3,
@@ -222,7 +303,9 @@ export async function createRule(repos: Repositories, c: RecurringCandidate): Pr
     merchantKey: c.merchantKey,
     autoCreated: true,
     autoCreatedAt: now,
-    active: true,
+    // Stale patterns are history only: ended on creation, no future rows.
+    active: !opts?.ended,
+    endDate: opts?.ended ? nextDue : undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -253,9 +336,13 @@ async function fallbackCategory(repos: Repositories): Promise<string> {
 }
 
 async function suggestRecurring(repos: Repositories, c: RecurringCandidate): Promise<void> {
-  // Don't suggest twice.
+  // Don't suggest the same stream twice.
   const open = await repos.reviewItems.open();
-  if (open.some((i) => i.merchantKey === c.merchantKey && i.reasons.includes("weak-recurring"))) return;
+  for (const i of open) {
+    if (!i.reasons.includes("weak-recurring") || i.merchantKey !== c.merchantKey) continue;
+    const tx = await repos.transactions.getById(i.transactionId);
+    if (tx && sameStream(i.merchantKey, tx.amount, c.merchantKey, c.avgAmount)) return;
+  }
   const tx = await repos.transactions.getById(c.charges[c.charges.length - 1]!.transactionId);
   if (!tx) return;
   await repos.reviewItems.put({
@@ -274,7 +361,7 @@ async function suggestRecurring(repos: Repositories, c: RecurringCandidate): Pro
   });
 }
 
-/** Flag new charges that cost materially more than their rule. */
+/** Flag new charges that cost materially more than their rule (matched to the closest amount-stream). */
 async function flagPriceIncreases(
   repos: Repositories,
   newTransactions: readonly Transaction[],
@@ -283,11 +370,10 @@ async function flagPriceIncreases(
     (r) => r.active && r.autoCreated && r.merchantKey,
   );
   if (rules.length === 0) return 0;
-  const byMerchant = new Map(rules.map((r) => [r.merchantKey as string, r]));
   let flagged = 0;
   for (const t of newTransactions) {
     if (t.type !== "Expense" || t.status !== "Cleared") continue;
-    const rule = byMerchant.get(merchantKey(t.payee));
+    const rule = findClosestRule(rules, merchantKey(t.payee), t.amount);
     if (!rule || rule.amount === 0) continue;
     const change = (t.amount - rule.amount) / rule.amount;
     if (change < PRICE_CHANGE_THRESHOLD) continue;
@@ -314,6 +400,9 @@ async function flagPriceIncreases(
 
 /**
  * Flag (and end) auto-created rules whose expected charge never arrived.
+ * "Missed" is measured against the latest transaction date in the rule's
+ * account data — never against today — so a stale import can never end
+ * an active rule.
  * Ended rules keep history but generate no future Scheduled rows.
  */
 async function flagMissedCharges(repos: Repositories, today: DateOnly): Promise<number> {
@@ -327,8 +416,9 @@ async function flagMissedCharges(repos: Repositories, today: DateOnly): Promise<
     const lastDate = tagged.map((t) => t.date).sort().pop() as DateOnly;
     const cadence: DetectedCadence =
       rule.frequency === "weekly" ? "weekly" : rule.frequency === "annual" ? "yearly" : "monthly";
+    const refDate = await latestDataDate(repos, rule.accountId, today);
     const expected = nextExpectedDate(lastDate, cadence);
-    if (diffDays(expected, today) <= MISSED_GRACE_DAYS) continue;
+    if (diffDays(expected, refDate) <= MISSED_GRACE_DAYS) continue;
     // Ended: keep history, no future rows.
     const now = nowIso();
     await repos.recurringRules.put({ ...rule, active: false, endDate: expected, updatedAt: now });
@@ -355,7 +445,7 @@ async function flagMissedCharges(repos: Repositories, today: DateOnly): Promise<
   return flagged;
 }
 
-/** Flag new charges from a merchant whose auto rule was ended. */
+/** Flag new charges from a merchant whose auto rule was ended (matched to the closest amount-stream). */
 async function flagResurrected(
   repos: Repositories,
   newTransactions: readonly Transaction[],
@@ -364,11 +454,10 @@ async function flagResurrected(
     (r) => !r.active && r.autoCreated && r.merchantKey,
   );
   if (rules.length === 0) return 0;
-  const byMerchant = new Map(rules.map((r) => [r.merchantKey as string, r]));
   let flagged = 0;
   for (const t of newTransactions) {
     if (t.type !== "Expense" || t.status !== "Cleared" || t.recurringRuleId) continue;
-    const rule = byMerchant.get(merchantKey(t.payee));
+    const rule = findClosestRule(rules, merchantKey(t.payee), t.amount);
     if (!rule) continue;
     const open = await repos.reviewItems.open();
     if (open.some((i) => i.transactionId === t.id && i.reasons.includes("resurrected-merchant"))) continue;
@@ -417,7 +506,7 @@ export async function undoRecurringRule(
     }
   }
   await repos.recurringRules.remove(ruleId);
-  if (rule.merchantKey) await dismissMerchant(repos, rule.merchantKey);
+  if (rule.merchantKey) await dismissMerchant(repos, streamKey(rule.merchantKey, rule.amount));
   return { untagged, removedScheduled };
 }
 
@@ -438,19 +527,35 @@ export async function reactivateRecurringRule(repos: Repositories, ruleId: strin
 /**
  * Create a rule from a weak-recurring suggestion (the user confirmed the
  * pattern). A manual confirmation only needs 2 charges; the >=3 bar is
- * for automatic creation.
+ * for automatic creation. `amountHint` picks the right amount-stream when
+ * one merchant has several.
  */
 export async function createRuleForMerchant(
   repos: Repositories,
   merchantKey: string,
+  amountHint?: number,
 ): Promise<CreatedRuleInfo | null> {
   const allTx = await repos.transactions.getAll();
   const charges = chargesFromTransactions(allTx).filter((c) => c.merchantKey === merchantKey);
   if (charges.length < 2) return null;
   const candidates = detectRecurring(charges);
-  const candidate = candidates.find((c) => c.merchantKey === merchantKey);
+  let candidate = candidates.find((c) => c.merchantKey === merchantKey);
+  if (amountHint !== undefined && candidates.length > 1) {
+    let best: RecurringCandidate | undefined;
+    let bestDiff = Infinity;
+    for (const c of candidates) {
+      const diff = Math.abs(c.avgAmount - amountHint);
+      if (diff < bestDiff) {
+        best = c;
+        bestDiff = diff;
+      }
+    }
+    candidate = best ?? candidate;
+  }
   if (!candidate) return null;
-  const existing = (await repos.recurringRules.getAll()).find((r) => r.merchantKey === merchantKey);
+  const existing = (await repos.recurringRules.getAll()).find((r) =>
+    sameStream(r.merchantKey ?? "", r.amount, candidate!.merchantKey, candidate!.avgAmount),
+  );
   if (existing) return null;
   return createRule(repos, candidate);
 }

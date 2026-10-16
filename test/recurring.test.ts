@@ -48,14 +48,23 @@ describe("detectRecurring", () => {
     expect(out[0]).toMatchObject({ cadence: "yearly", strength: "auto" });
   });
 
-  it("auto-detects a weekly charge", () => {
-    const out = detectRecurring([
+  it("auto-detects a weekly charge with 4+ similar charges, suggests with 3", () => {
+    const three = detectRecurring([
       charge("2026-10-01", 3500, "CLEANER"),
       charge("2026-10-08", 3500, "CLEANER"),
       charge("2026-10-15", 3500, "CLEANER"),
     ]);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ cadence: "weekly", strength: "auto" });
+    expect(three).toHaveLength(1);
+    expect(three[0]).toMatchObject({ cadence: "weekly", strength: "suggest" });
+
+    const four = detectRecurring([
+      charge("2026-10-01", 3500, "CLEANER"),
+      charge("2026-10-08", 3500, "CLEANER"),
+      charge("2026-10-15", 3500, "CLEANER"),
+      charge("2026-10-22", 3500, "CLEANER"),
+    ]);
+    expect(four).toHaveLength(1);
+    expect(four[0]).toMatchObject({ cadence: "weekly", strength: "auto" });
   });
 
   it("auto-detects varying-amount bills on a consistent schedule", () => {
