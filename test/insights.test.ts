@@ -11,7 +11,6 @@ import {
   subscriptionTotals,
 } from "../src/domain/engine/insights.js";
 import { mkAccount, mkCategory, mkGoal, mkRule, mkSplit, mkTransaction } from "./helpers.js";
-import { transferCategoryIds } from "../src/domain/entities/category.js";
 import type { Transaction } from "../src/domain/entities/transaction.js";
 import type { DateOnly } from "../src/domain/dates/dateOnly.js";
 import type { DailySnapshot } from "../src/domain/entities/settings.js";
@@ -44,23 +43,15 @@ describe("monthlyCashFlow", () => {
     expect(cf.net).toBe(100000);
   });
 
-  it("excludes Expenses filed under a Transfer category from outflow", () => {
-    const transferCat = mkCategory({ id: "cat-transfer", name: "Transfer" });
-    const cats = transferCategoryIds([transferCat, mkCategory({ id: "food", name: "Food" })]);
-    expect(cats.has("cat-transfer")).toBe(true);
+  it("counts Expenses filed under a Transfer category in outflow until reviewed", () => {
     const txs = [
       tx({ type: "Expense", amount: 40000, date: "2026-10-05", categoryId: "food" }),
       tx({ type: "Expense", amount: 60000, date: "2026-10-06", categoryId: "cat-transfer" }),
     ];
-    // Without the category set: old behavior (counts it).
-    expect(monthlyCashFlow(txs, OCT).expenses).toBe(100000);
-    // With the set: the transfer-like expense is excluded.
-    const cf = monthlyCashFlow(txs, OCT, (t) => t.amount, cats);
-    expect(cf.expenses).toBe(40000);
-    expect(cf.net).toBe(-40000);
-    // incomeVsOutflow threads it through too.
-    const buckets = incomeVsOutflow(txs, OCT, 1, (t) => t.amount, cats);
-    expect(buckets[0]!.outflow).toBe(40000);
+    const cf = monthlyCashFlow(txs, OCT);
+    expect(cf.expenses).toBe(100000);
+    const buckets = incomeVsOutflow(txs, OCT, 1);
+    expect(buckets[0]!.outflow).toBe(100000);
   });
 
   it("excludes Income rows carrying a splitId (IOU settlements are not earned income)", () => {
@@ -122,31 +113,31 @@ describe("spendingByCategory", () => {
     expect(rows[1]!.amount).toBe(3000);
   });
 
-  it("never shows Transfer as a spending category", () => {
+  it("counts Expenses filed under the Transfer category as spending until reviewed", () => {
+    // Miscategorized rows are data to fix (via the Transfer review flow),
+    // not data to hide: until reviewed they count like any other expense.
+    // Transfer-TYPE rows are still never spending.
     const transferCat = mkCategory({ id: "cat-transfer", name: "Transfer" });
-    const renamed = mkCategory({ id: "cat-x", name: "Transfer" });
     const txs = [
       tx({ type: "Expense", amount: 9000, date: "2026-10-01", categoryId: "food" }),
-      // Expense filed under the seeded Transfer category.
       tx({ type: "Expense", amount: 50000, date: "2026-10-02", categoryId: "cat-transfer" }),
-      // Same, but the category was renamed (id no longer matches the seed).
-      tx({ type: "Expense", amount: 20000, date: "2026-10-03", categoryId: "cat-x" }),
-      // Type Transfer is excluded too.
       tx({ type: "Transfer", amount: 30000, date: "2026-10-04", transferToAccountId: "sav" }),
     ];
-    const rows = spendingByCategory(txs, OCT, [food, fun, transferCat, renamed]);
-    expect(rows).toEqual([{ categoryId: "food", name: "Food", amount: 9000 }]);
+    const rows = spendingByCategory(txs, OCT, [food, fun, transferCat]);
+    expect(rows).toEqual([
+      { categoryId: "cat-transfer", name: "Transfer", amount: 50000 },
+      { categoryId: "food", name: "Food", amount: 9000 },
+    ]);
   });
 
-  it("sends a refund linked to a transfer to Uncategorized", () => {
+  it("nets a refund against its linked category, even a Transfer one", () => {
     const transferCat = mkCategory({ id: "cat-transfer", name: "Transfer" });
     const txs = [
       tx({ id: "e9", type: "Expense", amount: 50000, date: "2026-10-02", categoryId: "cat-transfer" }),
       tx({ type: "Refund", amount: 5000, date: "2026-10-04", refundOfTransactionId: "e9" }),
     ];
     const rows = spendingByCategory(txs, OCT, [food, transferCat]);
-    // No Transfer bucket; the refund lands in Uncategorized.
-    expect(rows).toEqual([{ categoryId: null, name: "Uncategorized", amount: -5000 }]);
+    expect(rows).toEqual([{ categoryId: "cat-transfer", name: "Transfer", amount: 45000 }]);
   });
 });
 

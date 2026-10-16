@@ -26,6 +26,7 @@ import { isDateOnly, todayLocal } from "../domain/dates/dateOnly.js";
 import type { DateOnly } from "../domain/dates/dateOnly.js";
 import type { Account } from "../domain/entities/account.js";
 import type { Category } from "../domain/entities/category.js";
+import { expenseCategories } from "../domain/entities/category.js";
 import type { Goal } from "../domain/entities/goal.js";
 import type { Transaction } from "../domain/entities/transaction.js";
 import { earmarkedInSpendable } from "../domain/engine/goals.js";
@@ -291,9 +292,10 @@ export function QuickLog({
     }
   };
 
-  const visibleCategories = categories.filter((c) =>
-    type === "Expense" ? c.kind === "expense" : c.kind === "income",
-  );
+  const visibleCategories =
+    type === "Expense"
+      ? expenseCategories(categories)
+      : categories.filter((c) => c.kind === "income");
 
   /** Fill payee plus that payee's usual category/account (clicking a completion). */
   const applyPayeeCompletion = (completion: string) => {

@@ -372,15 +372,13 @@ describe("computeTodaySpending", () => {
     expect(computeTodaySpending(txs, "2026-10-15", toBase)).toBe(876);
   });
 
-  it("excludes Expenses filed under a Transfer category when given the set", () => {
-    const cats = new Set(["cat-transfer"]);
+  it("counts Expenses filed under a Transfer category until reviewed", () => {
     const txs = [
       mkTransaction({ type: "Expense", amount: 876, date: "2026-10-15", status: "Cleared", categoryId: "cat-food" }),
       mkTransaction({ type: "Expense", amount: 5000, date: "2026-10-15", status: "Cleared", categoryId: "cat-transfer" }),
       mkTransaction({ type: "Transfer", amount: 9000, date: "2026-10-15", status: "Cleared", transferToAccountId: "sav" }),
     ];
-    expect(computeTodaySpending(txs, "2026-10-15", toBase, cats)).toBe(876);
-    // Without the set, the old behavior holds (backwards compatible).
+    // Transfer TYPE excluded; Transfer-category expense counts as spending.
     expect(computeTodaySpending(txs, "2026-10-15", toBase)).toBe(5876);
   });
 });

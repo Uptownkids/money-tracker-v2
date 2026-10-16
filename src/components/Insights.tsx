@@ -22,7 +22,6 @@ import { formatMoney, formatWhole } from "../app/format.js";
 import { makeConverter } from "../app/dashboard.js";
 import { FxRateMemory } from "../domain/money/fx.js";
 import { decimalsOf } from "../domain/money/currency.js";
-import { transferCategoryIds } from "../domain/entities/category.js";
 import type { MinorUnits } from "../domain/money/money.js";
 import type { DateOnly } from "../domain/dates/dateOnly.js";
 import type { Account } from "../domain/entities/account.js";
@@ -251,11 +250,9 @@ export function Insights() {
     const toBase = defaultTransactionToBase(accountCurrencyOf, convertToBase);
     const balanceToBase = (balance: MinorUnits, account: Account): MinorUnits =>
       convertToBase(balance, account.currency, account);
-    // Transfers are never spending, in any chart.
-    const transferCats = transferCategoryIds(categories);
 
     const balances = deriveBalances(accounts, transactions);
-    const cash = monthlyCashFlow(transactions, month, toBase, transferCats);
+    const cash = monthlyCashFlow(transactions, month, toBase);
     const refundsInMonth = transactions
       .filter((t) => t.type === "Refund" && t.date.slice(0, 7) === month && affectsBalance(t))
       .reduce<MinorUnits>((acc, t) => acc + toBase(t), 0);
@@ -265,11 +262,11 @@ export function Insights() {
       cash,
       refundsInMonth,
       categories: spendingByCategory(transactions, month, categories, toBase),
-      trend: incomeVsOutflow(transactions, month, 12, toBase, transferCats),
+      trend: incomeVsOutflow(transactions, month, 12, toBase),
       balances,
       worth: netWorth(balances),
       runway: runway(accounts, balances, transactions, today, toBase, balanceToBase),
-      history: spendingHistory(snapshots, transactions, toBase, baseCurrency, transferCats),
+      history: spendingHistory(snapshots, transactions, toBase, baseCurrency),
       goals: goalProgress(goals, transactions, toBase, new Map(accounts.map((a) => [a.id, a]))),
       ious: outstandingIous(splits, (amt, cur) => convertToBase(amt, cur)),
       subs: subscriptionTotals(rules, overrides, today),

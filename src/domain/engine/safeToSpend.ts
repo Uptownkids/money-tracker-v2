@@ -147,7 +147,6 @@ export function computeTodaySpending(
   transactions: readonly Transaction[],
   today: DateOnly,
   toBase: TransactionToBase,
-  transferCategoryIds: ReadonlySet<string> = new Set<string>(),
 ): MinorUnits {
   return sumMinor(
     transactions
@@ -157,8 +156,7 @@ export function computeTodaySpending(
           t.date === today &&
           affectsBalance(t) &&
           !t.recurringRuleId &&
-          !t.goalId &&
-          !(t.categoryId != null && transferCategoryIds.has(t.categoryId)),
+          !t.goalId,
       )
       .map(toBase),
   );

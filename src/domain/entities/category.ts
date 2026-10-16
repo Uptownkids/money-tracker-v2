@@ -1,3 +1,5 @@
+import type { Transaction } from "./transaction.js";
+
 export type CategoryKind = "income" | "expense";
 
 export interface Category {
@@ -44,4 +46,32 @@ export function transferCategoryIds(categories: readonly Category[]): Set<string
     }
   }
   return ids;
+}
+
+/**
+ * Expenses filed under a Transfer category. These are data to fix, not
+ * data to hide: each one is either a real transfer recorded as an
+ * expense (the destination account never got the money) or real spending
+ * with the wrong category. Until reviewed they count as spending; the
+ * Transfer review flow resolves each one.
+ */
+export function findTransferCategoryExpenses(
+  transactions: readonly Transaction[],
+  categories: readonly Category[],
+): Transaction[] {
+  const transferCats = transferCategoryIds(categories);
+  return transactions.filter(
+    (t) => t.type === "Expense" && t.categoryId != null && transferCats.has(t.categoryId),
+  );
+}
+
+/**
+ * Expense categories offered in pickers for new/edited entries: kind
+ * expense, never the Transfer category. Real transfers always use the
+ * Transfer transaction type, so the category must not be pickable —
+ * otherwise the destination balance never updates.
+ */
+export function expenseCategories(categories: readonly Category[]): Category[] {
+  const transferCats = transferCategoryIds(categories);
+  return categories.filter((c) => c.kind === "expense" && !transferCats.has(c.id));
 }

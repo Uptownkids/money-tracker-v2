@@ -45,6 +45,7 @@ import { Ious } from "../components/Ious.js";
 import { Insights } from "../components/Insights.js";
 import { Onboarding } from "../components/Onboarding.js";
 import { SettingsSheet, BackupBanner } from "../components/Settings.js";
+import { TransferReviewBanner } from "../components/TransferReview.js";
 import { PaydayRun } from "../components/PaydayRun.js";
 import { applySwUpdate, onSwUpdate } from "./swUpdates.js";
 import { loadDemoData } from "./seed.js";
@@ -687,6 +688,7 @@ export function App() {
           <>
             {isDemoMode() && <DemoBanner onChanged={reload} />}
             <BackupBanner onOpenSettings={() => setSettingsOpen(true)} />
+            <TransferReviewBanner onChanged={reload} />
 
             {error ? (
               <LoadError onRetry={reload} />
